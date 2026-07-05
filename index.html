@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>座席配置ツール</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<h1>座席配置ツール</h1>
+<p class="subtitle">shift.csv / newbee.csv / secret.csv を読み込んで自動配置し、必要に応じてドラッグ＆ドロップで調整してから CSV 出力します。</p>
+
+<div class="panel">
+  <h2><span class="step-num">1</span>CSV読み込み</h2>
+
+  <div class="file-row">
+    <label for="file-shift">出勤リスト (shift.csv)</label>
+    <input type="file" id="file-shift" accept=".csv">
+    <span class="file-status empty" id="status-shift">未読み込み</span>
+  </div>
+  <div class="file-row">
+    <label for="file-newbee">新人リスト (newbee.csv)</label>
+    <input type="file" id="file-newbee" accept=".csv">
+    <span class="file-status empty" id="status-newbee">未読み込み</span>
+  </div>
+  <div class="file-row">
+    <label for="file-secret">配置ルール (secret.csv)</label>
+    <input type="file" id="file-secret" accept=".csv">
+    <span class="file-status empty" id="status-secret">未読み込み</span>
+  </div>
+
+  <div class="actions">
+    <button id="btn-run">自動配置を実行</button>
+    <button id="btn-export" class="secondary">CSVを出力</button>
+  </div>
+
+  <details class="help">
+    <summary>CSVの形式について</summary>
+
+    <strong>shift.csv</strong>（ヘッダー行あり・UTF-8）
+    <table>
+      <tr><th>氏名</th><th>出勤時刻</th><th>退勤時刻</th></tr>
+      <tr><td>山田太郎</td><td>9:00</td><td>18:00</td></tr>
+    </table>
+
+    <strong>newbee.csv</strong>（ヘッダー行あり）数値が小さいほど新人。同数値の場合は shift.csv の後ろの行の人がより新人として扱われます。
+    <table>
+      <tr><th>氏名</th><th>新人度合い</th></tr>
+      <tr><td>山田太郎</td><td>1</td></tr>
+    </table>
+
+    <strong>secret.csv</strong>（ヘッダー行あり）1行目のルールと2行目のルールを「種別」列で区別します。
+    <table>
+      <tr><th>種別</th><th>対象1</th><th>対象2</th><th>禁止行</th><th>禁止列</th></tr>
+      <tr><td>隣接禁止</td><td>山田太郎</td><td>佐藤花子</td><td></td><td></td></tr>
+      <tr><td>座席禁止</td><td>鈴木一郎</td><td></td><td>1</td><td>2</td></tr>
+    </table>
+    <p>
+      「隣接禁止」＝対象1と対象2は同じ列の隣接する行に配置してはいけない（ルール1）。<br>
+      「座席禁止」＝対象1のスタッフを、禁止行・禁止列で指定した座席に配置してはいけない（ルール2、座席は下図の座標に対応）。<br>
+      該当しない列は空欄のままにしてください。
+    </p>
+
+    <p>座席番号（行, 列）は以下のとおりです。(4,4) は存在しません。</p>
+    <table>
+      <tr><td>1,1</td><td>1,2</td><td>1,3</td><td>1,4</td></tr>
+      <tr><td>2,1</td><td>2,2</td><td>2,3</td><td>2,4</td></tr>
+      <tr><td>3,1</td><td>3,2</td><td>3,3</td><td>3,4</td></tr>
+      <tr><td>4,1</td><td>4,2</td><td>4,3</td><td>—</td></tr>
+    </table>
+  </details>
+</div>
+
+<div class="panel">
+  <h2><span class="step-num">2</span>メッセージ</h2>
+  <div id="messages"><div class="empty-note">まだ配置は実行されていません。</div></div>
+</div>
+
+<div class="panel">
+  <h2><span class="step-num">3</span>座席配置（ドラッグ＆ドロップで人単位の入れ替えができます）</h2>
+
+  <div class="legend">
+    <span><span class="dot newbee"></span>新人（固定席）</span>
+    <span><span class="dot lock"></span>配置ルールあり（secret.csv対象者）</span>
+    <span><span class="dot overflow"></span>あふれ</span>
+  </div>
+
+  <div class="layout">
+    <div class="seat-grid" id="seat-grid"></div>
+
+    <div class="overflow-panel">
+      <h3>あふれ（6列目）</h3>
+      <div class="overflow-list" id="overflow-list"></div>
+      <div class="overflow-append" id="overflow-append">ここにドラッグして「あふれ」に移動</div>
+    </div>
+  </div>
+
+  <p class="footer-note">
+    ドラッグ操作は配置ルールを自動チェックしません。手動で動かした場合は、隣接禁止・禁止席のルールに違反していないか目視でご確認ください。
+    鍵アイコンが付いている人は secret.csv の対象者です。
+  </p>
+</div>
+
+<script src="js/csv.js"></script>
+<script src="js/algorithm.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
