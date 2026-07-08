@@ -9,7 +9,7 @@ window.SeatTool = window.SeatTool || {};
 window.SeatTool.csv = (function () {
   "use strict";
 
-  // ---------- 汎用CSVパーサー / ライター（RFC4180簡易実装） ----------
+  // ---------- 汎用CSVパーサー（RFC4180簡易実装） ----------
   function parseCSV(text) {
     text = text.replace(/^\uFEFF/, ''); // BOM除去
     const rows = [];
@@ -31,16 +31,6 @@ window.SeatTool.csv = (function () {
     }
     if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
     return rows.filter(r => !(r.length === 1 && r[0].trim() === ''));
-  }
-
-  function csvField(value) {
-    const s = String(value == null ? '' : value);
-    if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
-    return s;
-  }
-
-  function toCSV(rows) {
-    return rows.map(r => r.map(csvField).join(',')).join('\r\n');
   }
 
   // ---------- 時刻処理 ----------
@@ -133,6 +123,9 @@ window.SeatTool.csv = (function () {
 
   // ---------- secret.csv ----------
   // seatByNumber は algorithm.js が提供する（座席番号 -> {row,col} の変換・妥当性チェックに使用）
+  // 「禁止席」「席固定」の対象座席は、半角または全角スペース区切りで複数指定できる。
+  // 同じ人が複数行に分かれて書かれている場合は duplicateDesignatedNames /
+  // duplicateForbiddenNames として検出し、呼び出し側で配置を止める判断に使う。
   function parseSecretRows(text, seatByNumber) {
     const logs = [];
     const raw = parseCSV(text);
@@ -140,6 +133,10 @@ window.SeatTool.csv = (function () {
 
     const dataRows = raw.slice(1);
     const result = [];
+    const seenDesignated = new Set();
+    const seenForbidden = new Set();
+    const duplicateDesignated = new Set();
+    const duplicateForbidden = new Set();
 
     dataRows.forEach((r, i) => {
       const type = cell(r, 0);
@@ -151,32 +148,52 @@ window.SeatTool.csv = (function () {
           return;
         }
         result.push({ type: 'adjacent_forbidden', name1, name2 });
-      } else if (type === '座席禁止' || type === '席固定') {
+      } else if (type === '禁止席' || type === '席固定') {
         const name = cell(r, 1);
-        const seatNum = parseInt(r[3], 10);
-        if (!name || isNaN(seatNum)) {
+        const seatCell = cell(r, 3);
+        if (!name || !seatCell) {
           logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: ${type}の情報が不足しています` });
           return;
         }
-        const seat = seatByNumber(seatNum);
-        if (!seat) {
-          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 座席番号${seatNum}は存在しません` });
-          return;
-        }
-        result.push({
-          type: type === '座席禁止' ? 'seat_forbidden' : 'seat_designated',
-          name, row: seat.row, col: seat.col,
+        const kind = type === '禁止席' ? 'seat_forbidden' : 'seat_designated';
+        const seenSet = kind === 'seat_forbidden' ? seenForbidden : seenDesignated;
+        const dupSet = kind === 'seat_forbidden' ? duplicateForbidden : duplicateDesignated;
+        if (seenSet.has(name)) dupSet.add(name);
+        seenSet.add(name);
+
+        // 半角・全角スペースどちらでも区切りとして認める（同じ行内の重複番号は1つにまとめる）
+        const tokens = seatCell.split(/[ \u3000]+/).filter(Boolean);
+        const seenNumsInRow = new Set();
+        tokens.forEach(tok => {
+          if (!/^\d+$/.test(tok)) {
+            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「${tok}」は座席番号として認識できません` });
+            return;
+          }
+          const seatNum = parseInt(tok, 10);
+          const seat = seatByNumber(seatNum);
+          if (!seat) {
+            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 座席番号${seatNum}は存在しません` });
+            return;
+          }
+          if (seenNumsInRow.has(seatNum)) return;
+          seenNumsInRow.add(seatNum);
+          result.push({ type: kind, name, row: seat.row, col: seat.col });
         });
       } else {
-        logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 種別「${type}」は認識できません（「隣接禁止」「座席禁止」「席固定」のいずれか）` });
+        logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 種別「${type}」は認識できません（「隣接禁止」「禁止席」「席固定」のいずれか）` });
       }
     });
 
-    return { rows: result, logs };
+    return {
+      rows: result,
+      logs,
+      duplicateDesignatedNames: Array.from(duplicateDesignated),
+      duplicateForbiddenNames: Array.from(duplicateForbidden),
+    };
   }
 
   return {
-    parseCSV, csvField, toCSV, timeToMinutes,
+    parseCSV, timeToMinutes,
     parseShiftRows, parseRookieRows, parseSecretRows,
   };
 })();

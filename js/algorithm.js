@@ -76,8 +76,8 @@ window.SeatTool.algorithm = (function () {
   function slotOccupants(seatSlots) { return seatSlots.filter(Boolean); }
 
   // secret.csvの行から、判定用のインデックスを組み立てる。
-  // 座席禁止・座席指定は、同じ人に対して複数行あってよい
-  // （座席禁止=複数の禁止席、座席指定=複数の候補席のうちどれか1つでOK）。
+  // 禁止席・席固定は1人につき1行（対象座席はスペース区切りで複数指定）で書く
+  // 仕様のため、ここではその1行から生じた複数のseatKeyを配列にまとめるだけでよい。
   function buildSecretIndexes(secretRows) {
     const forbiddenPairSet = new Set();
     const forbiddenSeatSet = new Set();
@@ -257,7 +257,7 @@ window.SeatTool.algorithm = (function () {
     const overflow = [];
     const placedNames = new Set();
 
-    // ---- 0. 座席指定（最優先。候補が複数あればどれか1つでよい） ----
+    // ---- 0. 席固定（最優先。候補が複数あればどれか1つでよい） ----
     const designatedPeople = people.filter(p => designatedSeatsMap.has(p.name));
     designatedPeople.sort(byStartTimeThenLaterRowFirst);
 
@@ -311,7 +311,7 @@ window.SeatTool.algorithm = (function () {
       placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false);
     }
 
-    // ---- 2. secret.csv 記載スタッフ（隣接禁止・座席禁止の対象者。出勤時刻が早い順） ----
+    // ---- 2. secret.csv 記載スタッフ（隣接禁止・禁止席の対象者。出勤時刻が早い順） ----
     const priorityPeople = people.filter(p => priorityNames.has(p.name) && !placedNames.has(p.name));
     priorityPeople.sort(byStartTimeThenLaterRowFirst);
 

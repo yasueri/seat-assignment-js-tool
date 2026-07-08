@@ -76,6 +76,7 @@
       const file = input.files[0];
       if (!file) return;
       await loadFileInto(key, file);
+      input.value = ''; // 同じファイルを選び直しても change が発火するようにする
     });
   }
   setupFileInput('file-shift', 'shift');
@@ -84,11 +85,10 @@
 
   // ---------- CSVファイルのまとめてドラッグ&ドロップ ----------
   // ファイル名に含まれる文字列から、shift/rookie/secretのどれに該当するかを判定する
-  // （rookieについては、以前の名称であるnewbee/newbieも念のため受け付ける）
   function classifyFileName(filename) {
     const lower = filename.toLowerCase();
     if (lower.includes('shift')) return 'shift';
-    if (lower.includes('rookie') || lower.includes('newbee') || lower.includes('newbie')) return 'rookie';
+    if (lower.includes('rookie')) return 'rookie';
     if (lower.includes('secret')) return 'secret';
     return null;
   }
@@ -150,16 +150,31 @@
       alert('shift.csv / rookie.csv / secret.csv をすべて選択してください。');
       return;
     }
-    if (hasRunOnce) {
-      const ok = confirm('手動で調整した内容は失われます。自動配置をやり直しますか？');
-      if (!ok) return;
-    }
 
     const shiftParsed = parseShiftRows(rawText.shift);
     const rookieParsed = parseRookieRows(rawText.rookie);
     const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
 
     const allLogs = [...shiftParsed.logs, ...rookieParsed.logs, ...secretParsed.logs];
+
+    // 席固定・禁止席で同じ人が複数行に分かれている場合は、配置を実行せずに知らせる
+    // （複数の座席は1行にまとめてスペース区切りで指定する仕様のため）
+    const secretDuplicateMessage = (kind, name) =>
+      `secret.csv: 「${name}」さんが「${kind}」に複数行あります。1人1行にまとめ、複数の座席は半角または全角スペース区切りで指定してください。`;
+    const dupMessages = [
+      ...(secretParsed.duplicateDesignatedNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('席固定', name) })),
+      ...(secretParsed.duplicateForbiddenNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('禁止席', name) })),
+    ];
+    if (dupMessages.length > 0) {
+      renderMessages([...allLogs, ...dupMessages]);
+      scrollToMessages();
+      return; // secret.csv を修正してもらうため、配置は実行しない
+    }
+
+    if (hasRunOnce) {
+      const ok = confirm('手動で調整した内容は失われます。自動配置をやり直しますか？');
+      if (!ok) return;
+    }
 
     const result = assignSeats(shiftParsed.rows, rookieParsed.rows, secretParsed.rows);
     allLogs.push(...result.logs);
@@ -215,7 +230,7 @@
     startSpan.textContent = person.start;
     const sepSpan = document.createElement('span');
     sepSpan.className = 'time-sep';
-    sepSpan.textContent = ' - ';
+    sepSpan.textContent = '-';
     const endSpan = document.createElement('span');
     endSpan.textContent = person.end;
     timeLine.appendChild(startSpan);
@@ -372,7 +387,7 @@
     for (const s of SEATS) {
       const occHere = appState.seats[s.key].filter(Boolean);
 
-      // ルール2: 座席禁止
+      // ルール2: 禁止席
       occHere.forEach(p => {
         if (forbiddenSeatSet.has(`${p.name}|${s.key}`)) {
           violations.push(`${p.name}さんが禁止されている${numberOfKey(s.key)}番の座席に配置されています`);
@@ -401,11 +416,10 @@
 
     // ルール3: 席固定が守られているか（その日出勤している対象者のみチェック）
     for (const [name, seatKeys] of designatedSeatsMap.entries()) {
-      const isPresentToday = SEATS.some(s => appState.seats[s.key].filter(Boolean).some(p => p.name === name))
-        || appState.overflow.some(p => p.name === name);
-      if (!isPresentToday) continue;
-
       const seatedAt = SEATS.find(s => appState.seats[s.key].filter(Boolean).some(p => p.name === name));
+      const isInOverflow = appState.overflow.some(p => p.name === name);
+      if (!seatedAt && !isInOverflow) continue; // その日出勤していない
+
       if (!seatedAt || !seatKeys.includes(seatedAt.key)) {
         const seatList = seatKeys.map(k => `${numberOfKey(k)}番`).join(' または ');
         violations.push(`${name}さんが指定された座席（${seatList}）に配置されていません`);
@@ -455,6 +469,7 @@
         + appState.overflow.map(p => `<li>${escapeHtml(p.name)}（${escapeHtml(p.start)} - ${escapeHtml(p.end)}）</li>`).join('')
         + '</ul></div>';
     }
+    // ※ 一覧のレイアウト（1行3列）は <style> 側の .print-overflow ul で指定
 
     return `<!DOCTYPE html>
 <html lang="ja">
@@ -478,7 +493,8 @@
   .print-divider { border-top:1px dashed #999; margin:0.5mm 0; flex:0 0 auto; }
   .print-overflow { margin-top:8mm; }
   .print-overflow h2 { font-size:16px; border-bottom:1px solid #333; padding-bottom:2mm; }
-  .print-overflow li { font-size:15px; margin:1.5mm 0; }
+  .print-overflow ul { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3, 1fr); gap:1.5mm 6mm; }
+  .print-overflow li { font-size:15px; margin:0; }
   .no-print { text-align:center; margin-bottom:8mm; }
   .no-print button { font-size:15px; padding:9px 18px; cursor:pointer; }
   @media print { .no-print { display:none; } }
