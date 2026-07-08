@@ -354,6 +354,87 @@
   .badge.designated{ background:#E6F0FB; color:var(--accent-dark); }
   .badge.lock{ background:var(--lock-bg); color:var(--lock); }
 
+  .edit-toggle{
+    flex-shrink:0;
+    align-self:flex-start;
+    font-size:15px;
+    line-height:1;
+    padding:3px 5px;
+    margin:-2px -3px 0 0;
+    border-radius:5px;
+    border:none;
+    background:transparent;
+    color:var(--text-muted);
+    cursor:pointer;
+  }
+  .edit-toggle:hover{ background:#EEF3FE; color:var(--accent); }
+
+  .edit-form{
+    width:100%;
+    height:100%;
+    border-radius:6px;
+    border:1.5px solid var(--accent);
+    background:#fff;
+    padding:8px;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .edit-input{
+    width:100%;
+    font-family:var(--font-ui);
+    font-size:15px;
+    padding:5px 7px;
+    border-radius:5px;
+    border:1px solid var(--border);
+    box-sizing:border-box;
+  }
+  .edit-time-row{
+    display:flex;
+    align-items:center;
+    gap:4px;
+  }
+  .edit-time-row .edit-input{
+    font-family:var(--font-mono);
+    width:0;
+    flex:1;
+  }
+  .edit-time-sep{
+    color:var(--text-muted);
+    flex-shrink:0;
+  }
+  .edit-error{
+    font-size:12.5px;
+    color:var(--overflow);
+    min-height:1em;
+  }
+  .edit-btn-row{
+    display:flex;
+    gap:6px;
+    flex-wrap:wrap;
+  }
+  .edit-btn{
+    font-family:var(--font-ui);
+    font-size:13px;
+    padding:6px 10px;
+    border-radius:6px;
+    border:1px solid var(--accent);
+    background:var(--accent);
+    color:#fff;
+    cursor:pointer;
+  }
+  .edit-btn.cancel{
+    background:#fff;
+    color:var(--text-muted);
+    border-color:var(--border);
+  }
+  .edit-btn.delete{
+    background:#fff;
+    color:var(--overflow);
+    border-color:var(--overflow);
+    margin-left:auto;
+  }
+
   .overflow-panel{
     width:250px;
     min-height:130px;
