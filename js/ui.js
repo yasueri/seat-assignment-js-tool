@@ -293,23 +293,8 @@
 
     card.appendChild(info);
 
-    const badges = document.createElement('div');
-    badges.className = 'badges';
-    if (person.isRookie) {
-      badges.appendChild(makeBadge('rookie', person.rookieRank ? `新${person.rookieRank}` : '新'));
-    }
-    if (person.isDesignated) {
-      const label = seatNumbersLabel(person.designatedSeatNumbers, '・');
-      badges.appendChild(makeBadge('designated', '席固定', label));
-    }
-    if (person.hasForbiddenSeatRule) {
-      const label = seatNumbersLabel(person.forbiddenSeatNumbers, ',');
-      badges.appendChild(makeBadge('lock', '禁止席', label));
-    }
-    if (person.hasAdjacentRule) {
-      badges.appendChild(makeBadge('lock', '隣禁止', person.adjacentGroupLetter || ''));
-    }
-    card.appendChild(badges);
+    const side = document.createElement('div');
+    side.className = 'card-side';
 
     const editToggle = document.createElement('button');
     editToggle.type = 'button';
@@ -326,7 +311,27 @@
       const nameField = document.querySelector('.edit-form .edit-name');
       if (nameField) { nameField.focus(); nameField.select(); }
     });
-    card.appendChild(editToggle);
+    side.appendChild(editToggle);
+
+    const badges = document.createElement('div');
+    badges.className = 'badges';
+    if (person.isRookie) {
+      badges.appendChild(makeBadge('rookie', person.rookieRank ? `新${person.rookieRank}` : '新'));
+    }
+    if (person.isDesignated) {
+      const label = seatNumbersLabel(person.designatedSeatNumbers, '・');
+      badges.appendChild(makeBadge('designated', '席固定', label));
+    }
+    if (person.hasForbiddenSeatRule) {
+      const label = seatNumbersLabel(person.forbiddenSeatNumbers, ',');
+      badges.appendChild(makeBadge('lock', '禁止席', label));
+    }
+    if (person.hasAdjacentRule) {
+      badges.appendChild(makeBadge('lock', '隣禁止', person.adjacentGroupLetter || ''));
+    }
+    side.appendChild(badges);
+
+    card.appendChild(side);
 
     card.addEventListener('dragstart', (e) => {
       dragSource = loc;
@@ -344,6 +349,7 @@
     nameInput.type = 'text';
     nameInput.className = 'edit-input edit-name';
     nameInput.value = person.name;
+    nameInput.setAttribute('aria-label', '氏名');
     form.appendChild(nameInput);
 
     const timeRow = document.createElement('div');
@@ -353,6 +359,7 @@
     startInput.className = 'edit-input edit-time';
     startInput.value = person.start;
     startInput.placeholder = '9:00';
+    startInput.setAttribute('aria-label', '出勤時刻');
     const sep = document.createElement('span');
     sep.className = 'edit-time-sep';
     sep.textContent = '-';
@@ -361,6 +368,7 @@
     endInput.className = 'edit-input edit-time';
     endInput.value = person.end;
     endInput.placeholder = '18:00';
+    endInput.setAttribute('aria-label', '退勤時刻');
     timeRow.appendChild(startInput);
     timeRow.appendChild(sep);
     timeRow.appendChild(endInput);
