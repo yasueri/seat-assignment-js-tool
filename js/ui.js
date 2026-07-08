@@ -6,9 +6,9 @@
 (function (NS) {
   "use strict";
 
-  const { parseShiftRows, parseRookieRows, parseSecretRows } = NS.csv;
+  const { parseShiftRows, parseRookieRows, parseSecretRows, timeToMinutes } = NS.csv;
   const {
-    SEATS, seatExists, ADJACENCY, assignSeats, buildSecretIndexes, overlaps, isForbiddenPair,
+    SEATS, seatExists, ADJACENCY, assignSeats, buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat,
   } = NS.algorithm;
 
@@ -22,9 +22,10 @@
 
   // ---------- アプリの状態 ----------
   const rawText = { shift: null, rookie: null, secret: null };
-  const appState = { seats: initEmptyState(), overflow: [], ruleIndexes: null };
+  const appState = { seats: initEmptyState(), overflow: [], ruleIndexes: null, adjacentGroupLetters: null };
   let dragSource = null;
   let hasRunOnce = false;
+  let editingLoc = null; // 現在手入力編集中のカードの位置（null なら誰も編集していない）
 
   // 何度も参照するDOM要素はここでまとめて取得しておく
   const els = {
@@ -182,7 +183,9 @@
     appState.seats = result.state;
     appState.overflow = result.overflow;
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
+    appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
     hasRunOnce = true;
+    editingLoc = null;
 
     renderMessages(allLogs);
     render();
@@ -193,6 +196,56 @@
   });
 
   // ---------- 描画（座席グリッド・あふれ） ----------
+
+  // 位置（座席のスロット or あふれの何番目か）が同じかどうか
+  function locEquals(a, b) {
+    if (!a || !b || a.type !== b.type) return false;
+    if (a.type === 'seat') return a.seatKey === b.seatKey && a.slotIndex === b.slotIndex;
+    if (a.type === 'overflow') return a.index === b.index;
+    return false;
+  }
+
+  // 氏名を手入力で変更したとき、secret.csvのルール（席固定・禁止席・隣接禁止）を
+  // 新しい氏名で判定し直してバッジ用の情報を作る（新人バッジは対象外。自動配置時の
+  // 優先度に基づくもので、手入力の変更で再判定する性質のものではないため）。
+  function deriveBadgeFields(name) {
+    const idx = appState.ruleIndexes;
+    if (!idx) {
+      return { hasAdjacentRule: false, hasForbiddenSeatRule: false, isDesignated: false, designatedSeatNumbers: [], forbiddenSeatNumbers: [], adjacentGroupLetter: null };
+    }
+    const letters = appState.adjacentGroupLetters;
+    return {
+      hasAdjacentRule: idx.adjacentRuleNames.has(name),
+      hasForbiddenSeatRule: idx.forbiddenSeatRuleNames.has(name),
+      isDesignated: idx.designatedNames.has(name),
+      designatedSeatNumbers: (idx.designatedSeatsMap.get(name) || []).map(numberOfKey),
+      forbiddenSeatNumbers: (idx.forbiddenSeatsMap.get(name) || []).map(numberOfKey),
+      adjacentGroupLetter: (letters && letters.get(name)) || null,
+    };
+  }
+
+  // 指定した位置以外に、同じ氏名の人がすでにいないか確認する（手入力での重複防止）
+  function isNameUsedElsewhere(name, loc) {
+    for (const s of SEATS) {
+      for (let i = 0; i < 2; i++) {
+        if (loc.type === 'seat' && loc.seatKey === s.key && loc.slotIndex === i) continue;
+        const p = appState.seats[s.key][i];
+        if (p && p.name === name) return true;
+      }
+    }
+    for (let i = 0; i < appState.overflow.length; i++) {
+      if (loc.type === 'overflow' && loc.index === i) continue;
+      const p = appState.overflow[i];
+      if (p && p.name === name) return true;
+    }
+    return false;
+  }
+
+  // その日の配置から完全に削除する（あふれにも残らない）
+  function deletePersonAt(loc) {
+    setPersonAt(loc, null);
+    appState.overflow = appState.overflow.filter(Boolean);
+  }
 
   // 1〜2行のバッジを1つ作る（line2が空なら1行のみ）
   function makeBadge(cls, line1, line2) {
@@ -258,11 +311,133 @@
     }
     card.appendChild(badges);
 
+    const editToggle = document.createElement('button');
+    editToggle.type = 'button';
+    editToggle.className = 'edit-toggle';
+    editToggle.textContent = '✎';
+    editToggle.setAttribute('aria-label', '氏名・時間を編集');
+    editToggle.title = '氏名・時間を編集';
+    // 編集ボタンからドラッグが始まって、カードごと動いてしまわないようにする
+    editToggle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
+    editToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      editingLoc = loc;
+      render();
+      const nameField = document.querySelector('.edit-form .edit-name');
+      if (nameField) { nameField.focus(); nameField.select(); }
+    });
+    card.appendChild(editToggle);
+
     card.addEventListener('dragstart', (e) => {
       dragSource = loc;
       e.dataTransfer.effectAllowed = 'move';
     });
     return card;
+  }
+
+  // 氏名・時間の手入力編集フォーム（1件分）。保存/キャンセル/削除の操作を持つ。
+  function createEditForm(loc, person) {
+    const form = document.createElement('div');
+    form.className = 'edit-form';
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'edit-input edit-name';
+    nameInput.value = person.name;
+    form.appendChild(nameInput);
+
+    const timeRow = document.createElement('div');
+    timeRow.className = 'edit-time-row';
+    const startInput = document.createElement('input');
+    startInput.type = 'text';
+    startInput.className = 'edit-input edit-time';
+    startInput.value = person.start;
+    startInput.placeholder = '9:00';
+    const sep = document.createElement('span');
+    sep.className = 'edit-time-sep';
+    sep.textContent = '-';
+    const endInput = document.createElement('input');
+    endInput.type = 'text';
+    endInput.className = 'edit-input edit-time';
+    endInput.value = person.end;
+    endInput.placeholder = '18:00';
+    timeRow.appendChild(startInput);
+    timeRow.appendChild(sep);
+    timeRow.appendChild(endInput);
+    form.appendChild(timeRow);
+
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'edit-error';
+    form.appendChild(errorDiv);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'edit-btn-row';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'edit-btn save';
+    saveBtn.textContent = '保存';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'edit-btn cancel';
+    cancelBtn.textContent = 'キャンセル';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'edit-btn delete';
+    deleteBtn.textContent = '削除';
+    btnRow.appendChild(saveBtn);
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(deleteBtn);
+    form.appendChild(btnRow);
+
+    function save() {
+      const newName = nameInput.value.trim();
+      const newStart = startInput.value.trim();
+      const newEnd = endInput.value.trim();
+
+      if (!newName) { errorDiv.textContent = '氏名を入力してください。'; return; }
+      if (isNameUsedElsewhere(newName, loc)) {
+        errorDiv.textContent = `「${newName}」は既に他の座席・あふれで使われています。`;
+        return;
+      }
+      const startMin = timeToMinutes(newStart);
+      const endMin = timeToMinutes(newEnd);
+      if (startMin == null || endMin == null) {
+        errorDiv.textContent = '時刻は 9:00 のような形式で入力してください。';
+        return;
+      }
+      if (startMin >= endMin) {
+        errorDiv.textContent = '開始時刻は終了時刻より前にしてください。';
+        return;
+      }
+
+      const updated = {
+        ...person,
+        name: newName, start: newStart, end: newEnd, startMin, endMin,
+        ...deriveBadgeFields(newName),
+      };
+      setPersonAt(loc, updated);
+      editingLoc = null;
+      render();
+    }
+
+    saveBtn.addEventListener('click', save);
+    cancelBtn.addEventListener('click', () => { editingLoc = null; render(); });
+    deleteBtn.addEventListener('click', () => {
+      const ok = confirm(`${person.name}さんをこの日の配置から完全に削除します（あふれにも残りません）。よろしいですか？`);
+      if (!ok) return;
+      deletePersonAt(loc);
+      editingLoc = null;
+      render();
+    });
+
+    [nameInput, startInput, endInput].forEach(input => {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
+      });
+    });
+
+    return form;
   }
 
   function getPersonAt(loc) {
@@ -278,6 +453,7 @@
   // ドラッグ元とドロップ先の中身を入れ替える（人単位の移動・交換）
   function handleDrop(target) {
     if (!dragSource) return;
+    editingLoc = null; // ドラッグ操作が起きたら、開いていた編集フォームは閉じる
     if (target.type === 'overflow-append') {
       const person = getPersonAt(dragSource);
       if (!person) return;
@@ -294,7 +470,7 @@
     render();
   }
 
-  // 座席のスロット1つ分（空席 or 人物カード）とドロップ受付を作る
+  // 座席のスロット1つ分（空席 or 人物カード or 編集フォーム）とドロップ受付を作る
   function makeDropTarget(el, loc) {
     el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('dragover'); });
     el.addEventListener('dragleave', () => el.classList.remove('dragover'));
@@ -307,7 +483,7 @@
     const person = getPersonAt(loc);
     if (person) {
       slot.classList.add('filled');
-      slot.appendChild(createPersonCard(loc, person));
+      slot.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person));
     } else {
       slot.textContent = '空席';
     }
@@ -356,7 +532,7 @@
         const loc = { type: 'overflow', index: i };
         const wrapper = document.createElement('div');
         wrapper.className = 'overflow-slot';
-        wrapper.appendChild(createPersonCard(loc, person));
+        wrapper.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person));
         makeDropTarget(wrapper, loc);
         list.appendChild(wrapper);
       });
