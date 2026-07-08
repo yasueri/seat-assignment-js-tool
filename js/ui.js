@@ -1,17 +1,28 @@
 // ============================================================
 // ui.js
-// 画面の描画、ドラッグ&ドロップ、ファイル入力、CSV出力を担当する。
+// 画面の描画、ドラッグ&ドロップ、ファイル入力、印刷ページ出力を担当する。
 // csv.js と algorithm.js が先に読み込まれている前提。
 // ============================================================
 (function (NS) {
   "use strict";
 
-  const { parseShiftRows, parseNewbeeRows, parseSecretRows, toCSV } = NS.csv;
-  const { SEATS, seatExists, assignSeats } = NS.algorithm;
+  const { parseShiftRows, parseRookieRows, parseSecretRows } = NS.csv;
+  const {
+    SEATS, seatExists, ADJACENCY, assignSeats, buildSecretIndexes, overlaps, isForbiddenPair,
+    seatByNumber, numberOfKey, numberOfSeat,
+  } = NS.algorithm;
+
+  // ---------- 表示用ヘルパー ----------
+  // 座席番号の配列を、1〜2件なら番号を、3件以上なら「複数有」を返す（バッジ表示用）
+  function seatNumbersLabel(numbers, sep) {
+    if (!numbers || numbers.length === 0) return '';
+    if (numbers.length <= 2) return numbers.slice().sort((a, b) => a - b).join(sep);
+    return '複数有';
+  }
 
   // ---------- アプリの状態 ----------
-  const rawText = { shift: null, newbee: null, secret: null };
-  const appState = { seats: initEmptyState(), overflow: [] };
+  const rawText = { shift: null, rookie: null, secret: null };
+  const appState = { seats: initEmptyState(), overflow: [], ruleIndexes: null };
   let dragSource = null;
   let hasRunOnce = false;
 
@@ -33,25 +44,79 @@
   }
 
   // ---------- ファイル読み込み ----------
-  function setupFileInput(inputId, statusId, key) {
+  const fileStatusEls = {
+    shift: document.getElementById('status-shift'),
+    rookie: document.getElementById('status-rookie'),
+    secret: document.getElementById('status-secret'),
+  };
+
+  function markFileLoaded(key, filename) {
+    const el = fileStatusEls[key];
+    el.textContent = `読み込み済み: ${filename}`;
+    el.classList.remove('empty');
+  }
+  function markFileFailed(key) {
+    const el = fileStatusEls[key];
+    el.textContent = '読み込みに失敗しました';
+    el.classList.add('empty');
+  }
+
+  async function loadFileInto(key, file) {
+    try {
+      rawText[key] = await file.text();
+      markFileLoaded(key, file.name);
+    } catch (e) {
+      markFileFailed(key);
+    }
+  }
+
+  function setupFileInput(inputId, key) {
     const input = document.getElementById(inputId);
-    const status = document.getElementById(statusId);
     input.addEventListener('change', async () => {
       const file = input.files[0];
       if (!file) return;
-      try {
-        rawText[key] = await file.text();
-        status.textContent = `読み込み済み: ${file.name}`;
-        status.classList.remove('empty');
-      } catch (e) {
-        status.textContent = '読み込みに失敗しました';
-        status.classList.add('empty');
-      }
+      await loadFileInto(key, file);
     });
   }
-  setupFileInput('file-shift', 'status-shift', 'shift');
-  setupFileInput('file-newbee', 'status-newbee', 'newbee');
-  setupFileInput('file-secret', 'status-secret', 'secret');
+  setupFileInput('file-shift', 'shift');
+  setupFileInput('file-rookie', 'rookie');
+  setupFileInput('file-secret', 'secret');
+
+  // ---------- CSVファイルのまとめてドラッグ&ドロップ ----------
+  // ファイル名に含まれる文字列から、shift/rookie/secretのどれに該当するかを判定する
+  // （rookieについては、以前の名称であるnewbee/newbieも念のため受け付ける）
+  function classifyFileName(filename) {
+    const lower = filename.toLowerCase();
+    if (lower.includes('shift')) return 'shift';
+    if (lower.includes('rookie') || lower.includes('newbee') || lower.includes('newbie')) return 'rookie';
+    if (lower.includes('secret')) return 'secret';
+    return null;
+  }
+
+  const dropzone = document.getElementById('csv-dropzone');
+  dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+    if (files.length === 0) return;
+
+    const unmatched = [];
+    for (const file of files) {
+      const key = classifyFileName(file.name);
+      if (!key) { unmatched.push(file.name); continue; }
+      await loadFileInto(key, file);
+    }
+    if (unmatched.length > 0) {
+      alert(`ファイル名から種類を判別できませんでした: ${unmatched.join(', ')}\nファイル名に shift / rookie / secret のいずれかを含めてください。`);
+    }
+  });
+
+  // ページの他の場所にファイルがドロップされた際、ブラウザがファイルを開いて
+  // 遷移してしまわないようにする（誤ってドロップ位置がずれた場合の保険）
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => e.preventDefault());
 
   // ---------- メッセージ表示 ----------
   function renderMessages(logs) {
@@ -69,10 +134,20 @@
     });
   }
 
+  // メッセージ欄までスクロールして、一瞬枠を光らせる（ボタンとメッセージ欄が離れていて見落とされるのを防ぐ）
+  function scrollToMessages() {
+    const panel = document.getElementById('messages-panel');
+    if (!panel) return;
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    panel.classList.remove('flash-highlight');
+    void panel.offsetWidth; // アニメーションを再トリガーするための強制リフロー
+    panel.classList.add('flash-highlight');
+  }
+
   // ---------- 自動配置の実行 ----------
   document.getElementById('btn-run').addEventListener('click', () => {
-    if (!rawText.shift || !rawText.newbee || !rawText.secret) {
-      alert('shift.csv / newbee.csv / secret.csv をすべて選択してください。');
+    if (!rawText.shift || !rawText.rookie || !rawText.secret) {
+      alert('shift.csv / rookie.csv / secret.csv をすべて選択してください。');
       return;
     }
     if (hasRunOnce) {
@@ -81,52 +156,92 @@
     }
 
     const shiftParsed = parseShiftRows(rawText.shift);
-    const newbeeParsed = parseNewbeeRows(rawText.newbee);
-    const secretParsed = parseSecretRows(rawText.secret, seatExists);
+    const rookieParsed = parseRookieRows(rawText.rookie);
+    const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
 
-    const allLogs = [...shiftParsed.logs, ...newbeeParsed.logs, ...secretParsed.logs];
+    const allLogs = [...shiftParsed.logs, ...rookieParsed.logs, ...secretParsed.logs];
 
-    const result = assignSeats(shiftParsed.rows, newbeeParsed.rows, secretParsed.rows);
+    const result = assignSeats(shiftParsed.rows, rookieParsed.rows, secretParsed.rows);
     allLogs.push(...result.logs);
 
     appState.seats = result.state;
     appState.overflow = result.overflow;
+    appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     hasRunOnce = true;
 
     renderMessages(allLogs);
     render();
+    scrollToMessages();
 
     // 個別ダイアログが必要なログのみ alert 表示
     allLogs.filter(l => l.showDialog).forEach(l => alert(l.message));
   });
 
   // ---------- 描画（座席グリッド・あふれ） ----------
-  function personLabel(p) { return `${p.name} (${p.start}-${p.end})`; }
+
+  // 1〜2行のバッジを1つ作る（line2が空なら1行のみ）
+  function makeBadge(cls, line1, line2) {
+    const b = document.createElement('span');
+    b.className = 'badge ' + cls;
+    const l1 = document.createElement('div');
+    l1.className = 'badge-line1';
+    l1.textContent = line1;
+    b.appendChild(l1);
+    if (line2) {
+      const l2 = document.createElement('div');
+      l2.className = 'badge-line2';
+      l2.textContent = line2;
+      b.appendChild(l2);
+    }
+    return b;
+  }
 
   function createPersonCard(loc, person) {
     const card = document.createElement('div');
-    card.className = 'person-card' + (person.isNewbee ? ' newbee' : '');
+    card.className = 'person-card' + (person.isRookie ? ' rookie' : '');
     card.draggable = true;
+
+    const info = document.createElement('div');
+    info.className = 'info';
 
     const nameLine = document.createElement('div');
     nameLine.className = 'name';
-    const nameText = document.createElement('span');
-    nameText.textContent = person.name;
-    nameLine.appendChild(nameText);
-    if (person.isNewbee) {
-      const b = document.createElement('span'); b.className = 'badge newbee'; b.textContent = '新';
-      nameLine.appendChild(b);
-    }
-    if (person.hasConstraint) {
-      const b = document.createElement('span'); b.className = 'badge lock'; b.textContent = '🔒';
-      nameLine.appendChild(b);
-    }
-    card.appendChild(nameLine);
+    nameLine.textContent = person.name;
+    info.appendChild(nameLine);
 
     const timeLine = document.createElement('div');
     timeLine.className = 'time';
-    timeLine.textContent = `${person.start} - ${person.end}`;
-    card.appendChild(timeLine);
+    const startSpan = document.createElement('span');
+    startSpan.textContent = person.start;
+    const sepSpan = document.createElement('span');
+    sepSpan.className = 'time-sep';
+    sepSpan.textContent = ' - ';
+    const endSpan = document.createElement('span');
+    endSpan.textContent = person.end;
+    timeLine.appendChild(startSpan);
+    timeLine.appendChild(sepSpan);
+    timeLine.appendChild(endSpan);
+    info.appendChild(timeLine);
+
+    card.appendChild(info);
+
+    const badges = document.createElement('div');
+    badges.className = 'badges';
+    if (person.isRookie) {
+      badges.appendChild(makeBadge('rookie', person.rookieRank ? `新${person.rookieRank}` : '新'));
+    }
+    if (person.isDesignated) {
+      const label = seatNumbersLabel(person.designatedSeatNumbers, '・');
+      badges.appendChild(makeBadge('designated', '席固定', label));
+    }
+    if (person.hasForbiddenSeatRule) {
+      const label = seatNumbersLabel(person.forbiddenSeatNumbers, ',');
+      badges.appendChild(makeBadge('lock', '禁止席', label));
+    }
+    if (person.hasAdjacentRule) {
+      badges.appendChild(makeBadge('lock', '隣禁止', person.adjacentGroupLetter || ''));
+    }
+    card.appendChild(badges);
 
     card.addEventListener('dragstart', (e) => {
       dragSource = loc;
@@ -202,7 +317,7 @@
 
         const coord = document.createElement('div');
         coord.className = 'seat-coord';
-        coord.textContent = `${row},${col}`;
+        coord.textContent = numberOfSeat(row, col);
         seatDiv.appendChild(coord);
 
         seatDiv.appendChild(createSlot({ type: 'seat', seatKey: key, slotIndex: 0 }));
@@ -244,58 +359,158 @@
     document.querySelectorAll('.dragover').forEach(el => el.classList.remove('dragover'));
   });
 
-  // ---------- CSV 出力 ----------
-  async function downloadBlob(blob, filename) {
-    if (window.showSaveFilePicker) {
-      try {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: filename,
-          types: [{ description: 'CSV', accept: { 'text/csv': ['.csv'] } }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        return;
-      } catch (e) {
-        if (e && e.name === 'AbortError') return; // ユーザーがキャンセル
-        // それ以外の失敗時は通常のダウンロードにフォールバック
+  // ---------- 手動調整後のルールチェック ----------
+  function checkPlacementViolations() {
+    if (!appState.ruleIndexes) {
+      alert('先に「自動配置を実行」してください。');
+      return;
+    }
+    const { forbiddenPairSet, forbiddenSeatSet, designatedSeatsMap } = appState.ruleIndexes;
+    const violations = [];
+    const reportedAdjacentPairs = new Set();
+
+    for (const s of SEATS) {
+      const occHere = appState.seats[s.key].filter(Boolean);
+
+      // ルール2: 座席禁止
+      occHere.forEach(p => {
+        if (forbiddenSeatSet.has(`${p.name}|${s.key}`)) {
+          violations.push(`${p.name}さんが禁止されている${numberOfKey(s.key)}番の座席に配置されています`);
+        }
+      });
+
+      // 同席2名までのうち、勤務時間が重なっていないか
+      if (occHere.length === 2 && overlaps(occHere[0], occHere[1])) {
+        violations.push(`${numberOfKey(s.key)}番の座席で、勤務時間が重なる${occHere[0].name}さんと${occHere[1].name}さんが同席しています`);
+      }
+
+      // ルール1: 隣接禁止（同じペアを2回報告しないようにする）
+      for (const adjKey of ADJACENCY[s.key]) {
+        const occAdj = appState.seats[adjKey].filter(Boolean);
+        occHere.forEach(a => occAdj.forEach(b => {
+          if (isForbiddenPair(a.name, b.name, forbiddenPairSet)) {
+            const pairId = [a.name, b.name].sort().join('|') + '@' + [s.key, adjKey].sort().join(',');
+            if (!reportedAdjacentPairs.has(pairId)) {
+              reportedAdjacentPairs.add(pairId);
+              violations.push(`${a.name}さんと${b.name}さんが隣接する座席に配置されています`);
+            }
+          }
+        }));
       }
     }
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+
+    // ルール3: 席固定が守られているか（その日出勤している対象者のみチェック）
+    for (const [name, seatKeys] of designatedSeatsMap.entries()) {
+      const isPresentToday = SEATS.some(s => appState.seats[s.key].filter(Boolean).some(p => p.name === name))
+        || appState.overflow.some(p => p.name === name);
+      if (!isPresentToday) continue;
+
+      const seatedAt = SEATS.find(s => appState.seats[s.key].filter(Boolean).some(p => p.name === name));
+      if (!seatedAt || !seatKeys.includes(seatedAt.key)) {
+        const seatList = seatKeys.map(k => `${numberOfKey(k)}番`).join(' または ');
+        violations.push(`${name}さんが指定された座席（${seatList}）に配置されていません`);
+      }
+    }
+
+    renderMessages(violations.length === 0
+      ? [{ level: 'info', message: '違反は見つかりませんでした。' }]
+      : violations.map(m => ({ level: 'error', message: m })));
+    scrollToMessages();
+  }
+  document.getElementById('btn-check').addEventListener('click', checkPlacementViolations);
+
+  // ---------- 印刷用ページ ----------
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  document.getElementById('btn-export').addEventListener('click', async () => {
-    const rows = [];
-    rows.push(['1列目', '2列目', '3列目', '4列目', '', 'あふれ']);
+  // 座席1枠内の「1人分」を描画する。人がいなければ空のまま（枠の大きさは常に揃える）
+  function printOccupantHtml(p) {
+    if (!p) return '<div class="print-occupant"></div>';
+    return '<div class="print-occupant">'
+      + `<div class="print-name">${escapeHtml(p.name)}</div>`
+      + `<div class="print-time">${escapeHtml(p.start)} - ${escapeHtml(p.end)}</div>`
+      + '<div class="print-blank"></div>'
+      + '</div>';
+  }
 
-    const overflowLabels = appState.overflow.map(personLabel);
+  function buildPrintHtml(dateLabel, generatedLabel) {
+    let gridHtml = '<div class="print-grid">';
     for (let row = 1; row <= 4; row++) {
-      const cells = [];
       for (let col = 1; col <= 4; col++) {
-        if (!seatExists(row, col)) { cells.push(''); continue; }
-        const occ = appState.seats[`${row}-${col}`].filter(Boolean);
-        cells.push(occ.map(personLabel).join('\n'));
+        if (!seatExists(row, col)) { gridHtml += '<div class="print-seat print-spacer"></div>'; continue; }
+        const slots = appState.seats[`${row}-${col}`]; // [人 or null, 人 or null]（常に2枠）
+        gridHtml += `<div class="print-seat"><div class="coord">${numberOfSeat(row, col)}</div>`
+          + printOccupantHtml(slots[0])
+          + '<div class="print-divider"></div>'
+          + printOccupantHtml(slots[1])
+          + '</div>';
       }
-      cells.push('');
-      cells.push(overflowLabels[row - 1] || '');
-      rows.push(cells);
     }
-    for (let i = 4; i < overflowLabels.length; i++) {
-      rows.push(['', '', '', '', '', overflowLabels[i]]);
+    gridHtml += '</div>';
+
+    let overflowHtml = '';
+    if (appState.overflow.length > 0) {
+      overflowHtml = '<div class="print-overflow"><h2>あふれ</h2><ul>'
+        + appState.overflow.map(p => `<li>${escapeHtml(p.name)}（${escapeHtml(p.start)} - ${escapeHtml(p.end)}）</li>`).join('')
+        + '</ul></div>';
     }
 
-    const csvText = '\uFEFF' + toCSV(rows);
-    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+    return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(dateLabel)} 座席表</title>
+<style>
+  @page { size: A4 portrait; margin: 14mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Yu Gothic UI","Meiryo","Hiragino Kaku Gothic ProN",sans-serif; color:#222; margin:0; }
+  .print-generated { text-align:right; font-size:11px; color:#999; margin-bottom:2mm; }
+  .print-title { text-align:center; font-size:26px; font-weight:700; margin-bottom:10mm; }
+  .print-grid { display:grid; grid-template-columns:repeat(4, 41.75mm); width:182mm; gap:5mm; }
+  .print-seat { position:relative; border:1px solid #333; border-radius:3mm; padding:5mm 3mm 3mm 3mm; height:48mm; display:flex; flex-direction:column; }
+  .print-spacer { border:none; }
+  .print-seat .coord { position:absolute; top:1mm; right:1.5mm; font-size:12px; font-weight:700; color:#888; line-height:1; }
+  .print-occupant { flex:1 1 0; display:flex; flex-direction:column; min-height:0; padding-top:1mm; text-align:center; }
+  .print-name { font-size:16px; font-weight:600; }
+  .print-time { font-size:15px; color:#555; margin-top:0.5mm; }
+  .print-blank { flex:1; border-bottom:1px dotted #bbb; margin:1mm 3mm 1mm 3mm; }
+  .print-divider { border-top:1px dashed #999; margin:0.5mm 0; flex:0 0 auto; }
+  .print-overflow { margin-top:8mm; }
+  .print-overflow h2 { font-size:16px; border-bottom:1px solid #333; padding-bottom:2mm; }
+  .print-overflow li { font-size:15px; margin:1.5mm 0; }
+  .no-print { text-align:center; margin-bottom:8mm; }
+  .no-print button { font-size:15px; padding:9px 18px; cursor:pointer; }
+  @media print { .no-print { display:none; } }
+</style>
+</head>
+<body>
+  <div class="no-print"><button onclick="window.print()">この内容を印刷する</button></div>
+  <div class="print-generated">出力: ${escapeHtml(generatedLabel)}</div>
+  <div class="print-title">${escapeHtml(dateLabel)} 座席表</div>
+  ${gridHtml}
+  ${overflowHtml}
+</body>
+</html>`;
+  }
 
-    const now = new Date();
+  document.getElementById('btn-print').addEventListener('click', () => {
+    const today = new Date();
     const pad = n => String(n).padStart(2, '0');
-    const filename = `座席配置_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.csv`;
+    const defaultLabel = `${today.getFullYear()}年${pad(today.getMonth() + 1)}月${pad(today.getDate())}日`;
+    const dateLabel = prompt('座席表の日付を入力してください（前日に準備する場合などはご自由に変更してください）', defaultLabel);
+    if (dateLabel === null) return; // キャンセル
 
-    await downloadBlob(blob, filename);
+    const generatedLabel = `${today.getFullYear()}/${pad(today.getMonth() + 1)}/${pad(today.getDate())} ${pad(today.getHours())}:${pad(today.getMinutes())}`;
+
+    const win = window.open('', '_blank');
+    if (!win) {
+      alert('印刷用ページを開けませんでした。ブラウザのポップアップブロック設定をご確認ください。');
+      return;
+    }
+    win.document.open();
+    win.document.write(buildPrintHtml(dateLabel || defaultLabel, generatedLabel));
+    win.document.close();
   });
 
 })(window.SeatTool);

@@ -9,30 +9,38 @@
 <body>
 
 <h1>座席配置ツール</h1>
-<p class="subtitle">shift.csv / newbee.csv / secret.csv を読み込んで自動配置し、必要に応じてドラッグ＆ドロップで調整してから CSV 出力します。</p>
+<p class="subtitle">shift.csv / rookie.csv / secret.csv を読み込んで自動配置し、必要に応じてドラッグ＆ドロップで調整します。</p>
 
 <div class="panel">
   <h2><span class="step-num">1</span>CSV読み込み</h2>
 
+  <div class="dropzone" id="csv-dropzone">
+    <p><strong>ここに shift.csv・rookie.csv・secret.csv をまとめてドラッグ&ドロップ</strong></p>
+    <p class="dropzone-sub">ファイル名から自動的に振り分けます（ファイル名に shift / rookie / secret のいずれかを含めてください）</p>
+  </div>
+  <p class="dropzone-or">または、個別に選択:</p>
+
   <div class="file-row">
-    <label for="file-shift">出勤リスト (shift.csv)</label>
-    <input type="file" id="file-shift" accept=".csv">
+    <label class="file-btn" for="file-shift">出勤リスト選択</label>
+    <input type="file" id="file-shift" accept=".csv" class="visually-hidden">
+    <span class="file-name-label">shift.csv</span>
     <span class="file-status empty" id="status-shift">未読み込み</span>
   </div>
   <div class="file-row">
-    <label for="file-newbee">新人リスト (newbee.csv)</label>
-    <input type="file" id="file-newbee" accept=".csv">
-    <span class="file-status empty" id="status-newbee">未読み込み</span>
+    <label class="file-btn" for="file-rookie">新人リスト選択</label>
+    <input type="file" id="file-rookie" accept=".csv" class="visually-hidden">
+    <span class="file-name-label">rookie.csv</span>
+    <span class="file-status empty" id="status-rookie">未読み込み</span>
   </div>
   <div class="file-row">
-    <label for="file-secret">配置ルール (secret.csv)</label>
-    <input type="file" id="file-secret" accept=".csv">
+    <label class="file-btn" for="file-secret">配置ルール選択</label>
+    <input type="file" id="file-secret" accept=".csv" class="visually-hidden">
+    <span class="file-name-label">secret.csv</span>
     <span class="file-status empty" id="status-secret">未読み込み</span>
   </div>
 
   <div class="actions">
     <button id="btn-run">自動配置を実行</button>
-    <button id="btn-export" class="secondary">CSVを出力</button>
   </div>
 
   <details class="help">
@@ -44,35 +52,38 @@
       <tr><td>山田太郎</td><td>9:00</td><td>18:00</td></tr>
     </table>
 
-    <strong>newbee.csv</strong>（ヘッダー行あり）数値が小さいほど新人。同数値の場合は shift.csv の後ろの行の人がより新人として扱われます。
+    <strong>rookie.csv</strong>（ヘッダー行あり）数値が小さいほど新人。同数値の場合は shift.csv の後ろの行の人がより新人として扱われます。
     <table>
       <tr><th>氏名</th><th>新人度合い</th></tr>
       <tr><td>山田太郎</td><td>1</td></tr>
     </table>
 
-    <strong>secret.csv</strong>（ヘッダー行あり）1行目のルールと2行目のルールを「種別」列で区別します。
+    <strong>secret.csv</strong>（ヘッダー行あり）「種別」列でルールの種類を区別します。同じ人について複数行書いてもかまいません。
     <table>
-      <tr><th>種別</th><th>対象1</th><th>対象2</th><th>禁止行</th><th>禁止列</th></tr>
-      <tr><td>隣接禁止</td><td>山田太郎</td><td>佐藤花子</td><td></td><td></td></tr>
-      <tr><td>座席禁止</td><td>鈴木一郎</td><td></td><td>1</td><td>2</td></tr>
+      <tr><th>種別</th><th>対象1</th><th>対象2</th><th>対象座席</th></tr>
+      <tr><td>隣接禁止</td><td>山田太郎</td><td>佐藤花子</td><td></td></tr>
+      <tr><td>座席禁止</td><td>鈴木一郎</td><td></td><td>5</td></tr>
+      <tr><td>席固定</td><td>高橋次郎</td><td></td><td>7</td></tr>
+      <tr><td>席固定</td><td>高橋次郎</td><td></td><td>11</td></tr>
     </table>
     <p>
-      「隣接禁止」＝対象1と対象2は同じ列の隣接する行に配置してはいけない（ルール1）。<br>
-      「座席禁止」＝対象1のスタッフを、禁止行・禁止列で指定した座席に配置してはいけない（ルール2、座席は下図の座標に対応）。<br>
-      該当しない列は空欄のままにしてください。
+      「隣接禁止」＝対象1と対象2は同じ列の隣接する座席に配置してはいけない（ルール1）。<br>
+      「座席禁止」＝対象1のスタッフを、対象座席で指定した座席番号に配置してはいけない（ルール2）。同じ人に複数行書けば、禁止したい席をいくつでも指定できます。<br>
+      「席固定」＝対象1のスタッフを、対象座席で指定した座席番号に必ず配置する。他のどのルールよりも最優先で配置されます。同じ人に複数行書くと「このうちどれかの席ならOK」という候補として扱われます（上の例では高橋次郎さんは7番か11番のどちらか）。<br>
+      該当しない列は空欄のままにしてください。対象座席には数字（半角）を入力してください。
     </p>
 
-    <p>座席番号（行, 列）は以下のとおりです。(4,4) は存在しません。</p>
+    <p>座席番号は以下のとおりです（全15席）。右下の1席は存在しません。</p>
     <table>
-      <tr><td>1,1</td><td>1,2</td><td>1,3</td><td>1,4</td></tr>
-      <tr><td>2,1</td><td>2,2</td><td>2,3</td><td>2,4</td></tr>
-      <tr><td>3,1</td><td>3,2</td><td>3,3</td><td>3,4</td></tr>
-      <tr><td>4,1</td><td>4,2</td><td>4,3</td><td>—</td></tr>
+      <tr><td>1</td><td>5</td><td>9</td><td>13</td></tr>
+      <tr><td>2</td><td>6</td><td>10</td><td>14</td></tr>
+      <tr><td>3</td><td>7</td><td>11</td><td>15</td></tr>
+      <tr><td>4</td><td>8</td><td>12</td><td>—</td></tr>
     </table>
   </details>
 </div>
 
-<div class="panel">
+<div class="panel" id="messages-panel">
   <h2><span class="step-num">2</span>メッセージ</h2>
   <div id="messages"><div class="empty-note">まだ配置は実行されていません。</div></div>
 </div>
@@ -81,8 +92,9 @@
   <h2><span class="step-num">3</span>座席配置（ドラッグ＆ドロップで人単位の入れ替えができます）</h2>
 
   <div class="legend">
-    <span><span class="dot newbee"></span>新人（固定席）</span>
-    <span><span class="dot lock"></span>配置ルールあり（secret.csv対象者）</span>
+    <span><span class="dot rookie"></span>新人（固定席・数字は優先順位）</span>
+    <span><span class="dot designated"></span>席固定あり</span>
+    <span><span class="dot lock"></span>隣接禁止・禁止席あり</span>
     <span><span class="dot overflow"></span>あふれ</span>
   </div>
 
@@ -90,15 +102,19 @@
     <div class="seat-grid" id="seat-grid"></div>
 
     <div class="overflow-panel">
-      <h3>あふれ（6列目）</h3>
+      <h3>あふれ</h3>
       <div class="overflow-list" id="overflow-list"></div>
       <div class="overflow-append" id="overflow-append">ここにドラッグして「あふれ」に移動</div>
     </div>
   </div>
 
+  <div class="actions">
+    <button id="btn-check" class="secondary multiline-btn"><span>手動変更後</span><span>配置違反チェック</span></button>
+    <button id="btn-print" class="secondary multiline-btn"><span>印刷用ページ</span><span>を開く</span></button>
+  </div>
+
   <p class="footer-note">
-    ドラッグ操作は配置ルールを自動チェックしません。手動で動かした場合は、隣接禁止・禁止席のルールに違反していないか目視でご確認ください。
-    鍵アイコンが付いている人は secret.csv の対象者です。
+    ドラッグ操作は配置ルールを自動チェックしません。手動で動かした後は「手動変更後 配置違反チェック」ボタンで違反がないか確認してください。
   </p>
 </div>
 

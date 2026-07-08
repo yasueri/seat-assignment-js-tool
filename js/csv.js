@@ -1,6 +1,6 @@
 // ============================================================
 // csv.js
-// CSVの読み書きと、shift.csv / newbee.csv / secret.csv それぞれの
+// CSVの読み書きと、shift.csv / rookie.csv / secret.csv それぞれの
 // 解析・バリデーションを担当する。
 // 他ファイルからは window.SeatTool.csv 経由で利用する。
 // ============================================================
@@ -102,11 +102,11 @@ window.SeatTool.csv = (function () {
     return { rows: result, logs };
   }
 
-  // ---------- newbee.csv ----------
-  function parseNewbeeRows(text) {
+  // ---------- rookie.csv ----------
+  function parseRookieRows(text) {
     const logs = [];
     const raw = parseCSV(text);
-    checkHeader(raw, ['氏名', '新人度合い'], 'newbee.csv', logs);
+    checkHeader(raw, ['氏名', '新人度合い'], 'rookie.csv', logs);
 
     const dataRows = raw.slice(1);
     const result = [];
@@ -117,11 +117,11 @@ window.SeatTool.csv = (function () {
       const degree = parseFloat(r[1]);
       if (!name) return;
       if (isNaN(degree)) {
-        logs.push({ level: 'warn', message: `newbee.csv ${i + 2}行目: 新人度合いが数値ではないため読み飛ばしました（${name}）` });
+        logs.push({ level: 'warn', message: `rookie.csv ${i + 2}行目: 新人度合いが数値ではないため読み飛ばしました（${name}）` });
         return;
       }
       if (seenNames.has(name)) {
-        logs.push({ level: 'warn', message: `newbee.csv ${i + 2}行目: 「${name}」が複数回記載されています。最初の行のみ使用します。` });
+        logs.push({ level: 'warn', message: `rookie.csv ${i + 2}行目: 「${name}」が複数回記載されています。最初の行のみ使用します。` });
         return;
       }
       seenNames.add(name);
@@ -132,11 +132,11 @@ window.SeatTool.csv = (function () {
   }
 
   // ---------- secret.csv ----------
-  // seatExists は algorithm.js が提供する（座標の妥当性チェックに使用）
-  function parseSecretRows(text, seatExists) {
+  // seatByNumber は algorithm.js が提供する（座席番号 -> {row,col} の変換・妥当性チェックに使用）
+  function parseSecretRows(text, seatByNumber) {
     const logs = [];
     const raw = parseCSV(text);
-    checkHeader(raw, ['種別', '対象1', '対象2', '禁止行', '禁止列'], 'secret.csv', logs);
+    checkHeader(raw, ['種別', '対象1', '対象2', '対象座席'], 'secret.csv', logs);
 
     const dataRows = raw.slice(1);
     const result = [];
@@ -151,21 +151,24 @@ window.SeatTool.csv = (function () {
           return;
         }
         result.push({ type: 'adjacent_forbidden', name1, name2 });
-      } else if (type === '座席禁止') {
+      } else if (type === '座席禁止' || type === '席固定') {
         const name = cell(r, 1);
-        const rowNum = parseInt(r[3], 10);
-        const colNum = parseInt(r[4], 10);
-        if (!name || isNaN(rowNum) || isNaN(colNum)) {
-          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 座席禁止の情報が不足しています` });
+        const seatNum = parseInt(r[3], 10);
+        if (!name || isNaN(seatNum)) {
+          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: ${type}の情報が不足しています` });
           return;
         }
-        if (!seatExists(rowNum, colNum)) {
-          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 座席(${rowNum},${colNum}) は存在しません` });
+        const seat = seatByNumber(seatNum);
+        if (!seat) {
+          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 座席番号${seatNum}は存在しません` });
           return;
         }
-        result.push({ type: 'seat_forbidden', name, row: rowNum, col: colNum });
+        result.push({
+          type: type === '座席禁止' ? 'seat_forbidden' : 'seat_designated',
+          name, row: seat.row, col: seat.col,
+        });
       } else {
-        logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 種別「${type}」は認識できません（「隣接禁止」または「座席禁止」）` });
+        logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 種別「${type}」は認識できません（「隣接禁止」「座席禁止」「席固定」のいずれか）` });
       }
     });
 
@@ -174,6 +177,6 @@ window.SeatTool.csv = (function () {
 
   return {
     parseCSV, csvField, toCSV, timeToMinutes,
-    parseShiftRows, parseNewbeeRows, parseSecretRows,
+    parseShiftRows, parseRookieRows, parseSecretRows,
   };
 })();
