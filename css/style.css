@@ -241,7 +241,7 @@
   }
   .seat-grid{
     display:grid;
-    grid-template-columns:repeat(4, 200px);
+    grid-template-columns:repeat(4, 212px);
     grid-template-rows:repeat(4, auto);
     gap:14px;
   }
@@ -314,9 +314,11 @@
     font-family:var(--font-mono);
     font-size:16px;
     color:var(--text-muted);
+    white-space:nowrap;
   }
   .person-card .time .time-sep{
     font-size:12px;
+    margin:0 1px;
   }
   .person-card .name{
     font-weight:600;
