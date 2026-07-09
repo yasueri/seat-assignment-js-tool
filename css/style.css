@@ -13,10 +13,6 @@
     --overflow:#C0392B;
     --overflow-bg:#FBEAE8;
     --empty-border:#C7CEDA;
-    --yakuseki:#7C3AED;
-    --yakuseki-bg:#F1EAFE;
-    --gl:#0E7C86;
-    --gl-bg:#E3F4F5;
     --ot-bg:#FFF3B0;
     --ot-mark:#8A6D00;
     --font-ui: "Yu Gothic UI","Meiryo","Hiragino Kaku Gothic ProN",sans-serif;
@@ -305,17 +301,9 @@
     padding:6px;
     display:flex;
     flex-direction:column;
-    gap:4px;
-  }
-  .leader-coord{
-    font-family:var(--font-mono);
-    font-size:12px;
-    font-weight:700;
-    color:var(--text-muted);
-    text-align:right;
   }
   .leader-slot{
-    min-height:58px;
+    min-height:64px;
     border-radius:6px;
     border:1.5px dashed var(--empty-border);
     display:flex;
@@ -355,31 +343,25 @@
   }
   .leader-name{
     flex:1;
-    font-size:14px;
+    font-size:15px;
     font-weight:600;
     white-space:nowrap;
     overflow:hidden;
     text-overflow:ellipsis;
     min-width:0;
   }
-  .leader-role-badge{
-    align-self:flex-start;
-    font-size:11.5px;
-    font-weight:600;
-    padding:1px 6px;
-    border-radius:8px;
-  }
-  .leader-role-badge.yakuseki{ background:var(--yakuseki-bg); color:var(--yakuseki); }
-  .leader-role-badge.gl{ background:var(--gl-bg); color:var(--gl); }
   .leader-time{
     font-family:var(--font-mono);
-    font-size:13.5px;
+    font-size:15px;
     color:var(--text-muted);
     white-space:nowrap;
   }
   .leader-time .time-sep{
-    font-size:11px;
+    font-size:12px;
     margin:0 1px;
+  }
+  .leader-blank{
+    flex:1;
   }
 
   .seat-grid{
