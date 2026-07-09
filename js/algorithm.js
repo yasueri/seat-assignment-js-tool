@@ -258,8 +258,16 @@ window.SeatTool.algorithm = (function () {
     const placedNames = new Set();
 
     // ---- 0. 席固定（最優先。候補が複数あればどれか1つでよい） ----
+    // 候補座席が少ない人ほど融通が利かないため先に配置する（同数の場合は出勤時刻が早い順）。
+    // 例えば候補1つの人と候補3つの人が同じ座席を希望している場合、候補3つの人を
+    // 先に配置してしまうと、候補1つの人が行き場を失ってしまう可能性があるため。
     const designatedPeople = people.filter(p => designatedSeatsMap.has(p.name));
-    designatedPeople.sort(byStartTimeThenLaterRowFirst);
+    designatedPeople.sort((a, b) => {
+      const countA = designatedSeatsMap.get(a.name).length;
+      const countB = designatedSeatsMap.get(b.name).length;
+      if (countA !== countB) return countA - countB;
+      return byStartTimeThenLaterRowFirst(a, b);
+    });
 
     for (const person of designatedPeople) {
       const candidateSeats = designatedSeatsMap.get(person.name)

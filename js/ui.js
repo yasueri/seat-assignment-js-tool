@@ -20,6 +20,15 @@
     return '複数有';
   }
 
+  // 氏名の表示用省略。5文字以下ならそのまま、6文字以上なら先頭4文字+「...」にする
+  // （空白も1文字として数える）。例: 「田中太郎」(4文字)→そのまま／
+  // 6文字の氏名→先頭4文字+「...」
+  function truncateName(name) {
+    const chars = Array.from(name);
+    if (chars.length <= 5) return name;
+    return chars.slice(0, 4).join('') + '...';
+  }
+
   // ---------- アプリの状態 ----------
   const rawText = { shift: null, rookie: null, secret: null };
   const appState = { seats: initEmptyState(), overflow: [], ruleIndexes: null, adjacentGroupLetters: null };
@@ -272,10 +281,33 @@
     const info = document.createElement('div');
     info.className = 'info';
 
+    const nameRow = document.createElement('div');
+    nameRow.className = 'name-row';
+
     const nameLine = document.createElement('div');
     nameLine.className = 'name';
-    nameLine.textContent = person.name;
-    info.appendChild(nameLine);
+    nameLine.textContent = truncateName(person.name);
+    nameLine.title = person.name; // 省略されている場合でも、全体をツールチップで確認できるようにする
+    nameRow.appendChild(nameLine);
+
+    const editToggle = document.createElement('button');
+    editToggle.type = 'button';
+    editToggle.className = 'edit-toggle';
+    editToggle.textContent = '✎';
+    editToggle.setAttribute('aria-label', '氏名・時間を編集');
+    editToggle.title = '氏名・時間を編集';
+    // 編集ボタンからドラッグが始まって、カードごと動いてしまわないようにする
+    editToggle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
+    editToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      editingLoc = loc;
+      render();
+      const nameField = document.querySelector('.edit-form .edit-name');
+      if (nameField) { nameField.focus(); nameField.select(); }
+    });
+    nameRow.appendChild(editToggle);
+
+    info.appendChild(nameRow);
 
     const timeLine = document.createElement('div');
     timeLine.className = 'time';
@@ -293,30 +325,10 @@
 
     card.appendChild(info);
 
-    const side = document.createElement('div');
-    side.className = 'card-side';
-
-    const editToggle = document.createElement('button');
-    editToggle.type = 'button';
-    editToggle.className = 'edit-toggle';
-    editToggle.textContent = '✎';
-    editToggle.setAttribute('aria-label', '氏名・時間を編集');
-    editToggle.title = '氏名・時間を編集';
-    // 編集ボタンからドラッグが始まって、カードごと動いてしまわないようにする
-    editToggle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
-    editToggle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      editingLoc = loc;
-      render();
-      const nameField = document.querySelector('.edit-form .edit-name');
-      if (nameField) { nameField.focus(); nameField.select(); }
-    });
-    side.appendChild(editToggle);
-
     const badges = document.createElement('div');
     badges.className = 'badges';
     if (person.isRookie) {
-      badges.appendChild(makeBadge('rookie', person.rookieRank ? `新${person.rookieRank}` : '新'));
+      badges.appendChild(makeBadge('rookie', person.rookieRank ? `新人${person.rookieRank}` : '新人'));
     }
     if (person.isDesignated) {
       const label = seatNumbersLabel(person.designatedSeatNumbers, '・');
@@ -329,9 +341,7 @@
     if (person.hasAdjacentRule) {
       badges.appendChild(makeBadge('lock', '隣禁止', person.adjacentGroupLetter || ''));
     }
-    side.appendChild(badges);
-
-    card.appendChild(side);
+    card.appendChild(badges);
 
     card.addEventListener('dragstart', (e) => {
       dragSource = loc;

@@ -45,6 +45,7 @@
 
   <details class="help">
     <summary>CSVの形式について</summary>
+    <div class="help-content">
 
     <strong>shift.csv</strong>（ヘッダー行あり・UTF-8）
     <table>
@@ -80,6 +81,7 @@
       <tr><td>3</td><td>7</td><td>11</td><td>15</td></tr>
       <tr><td>4</td><td>8</td><td>12</td><td>—</td></tr>
     </table>
+    </div>
   </details>
 </div>
 
@@ -91,12 +93,24 @@
 <div class="panel">
   <h2><span class="step-num">3</span>座席配置（ドラッグ＆ドロップで人単位の入れ替えができます）</h2>
 
-  <div class="legend">
-    <span><span class="dot rookie"></span>新人（固定席・数字は優先順位）</span>
-    <span><span class="dot designated"></span>席固定あり</span>
-    <span><span class="dot lock"></span>隣接禁止・禁止席あり</span>
-    <span><span class="dot overflow"></span>あふれ</span>
-  </div>
+  <details class="help">
+    <summary>座席カードの見かたについて</summary>
+    <div class="help-content">
+    <p>
+      各カードの氏名の右にある✎アイコンから、氏名・時間の手入力修正や、その日の配置からの削除ができます。
+    </p>
+    <table>
+      <tr><th>バッジ</th><th>意味</th></tr>
+      <tr><td>新人1〜新人4</td><td>新人（rookie.csv記載者）の、2列目固定席での優先順位</td></tr>
+      <tr><td>席固定</td><td>secret.csvで座席を指定されている対象者。候補が1〜2件なら座席番号を、3件以上なら「複数有」と表示</td></tr>
+      <tr><td>禁止席</td><td>secret.csvでその座席への配置を禁止されている対象者。件数の表示ルールは席固定と同じ</td></tr>
+      <tr><td>隣禁止</td><td>隣接禁止ルールの対象者。同じ相手同士には同じアルファベット（A・B・C…）が付く</td></tr>
+    </table>
+    <p>
+      配置しきれなかったスタッフは、右の「あふれ」欄に表示されます。
+    </p>
+    </div>
+  </details>
 
   <div class="layout">
     <div class="seat-grid" id="seat-grid"></div>

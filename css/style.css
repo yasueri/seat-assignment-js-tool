@@ -182,6 +182,17 @@
     color:var(--accent);
     font-size:16px;
     margin-bottom:8px;
+    padding:4px 0;
+  }
+  details.help[open] summary{
+    margin-bottom:0;
+  }
+  details.help .help-content{
+    border-left:3px solid var(--accent);
+    background:#F7F9FC;
+    border-radius:0 8px 8px 0;
+    padding:10px 14px 12px;
+    margin:6px 0 4px;
   }
   details.help table{
     border-collapse:collapse;
@@ -218,21 +229,6 @@
   .log-line.warn{ border-left-color:var(--lock); background:var(--lock-bg); }
   .log-line.error{ border-left-color:var(--overflow); background:var(--overflow-bg); }
 
-  .legend{
-    display:flex;
-    gap:20px;
-    font-size:14.5px;
-    color:var(--text-muted);
-    margin-bottom:16px;
-    flex-wrap:wrap;
-  }
-  .legend span{ display:inline-flex; align-items:center; gap:6px; }
-  .dot{ width:10px;height:10px;border-radius:50%; display:inline-block; }
-  .dot.rookie{ background:var(--rookie); }
-  .dot.designated{ background:var(--accent-dark); }
-  .dot.lock{ background:var(--lock); }
-  .dot.overflow{ background:var(--overflow); }
-
   .layout{
     display:flex;
     gap:22px;
@@ -241,7 +237,7 @@
   }
   .seat-grid{
     display:grid;
-    grid-template-columns:repeat(4, 212px);
+    grid-template-columns:repeat(4, 190px);
     grid-template-rows:repeat(4, auto);
     gap:14px;
   }
@@ -299,15 +295,24 @@
     display:flex;
     flex-direction:row;
     align-items:center;
-    justify-content:space-between;
-    gap:6px;
+    justify-content:flex-start;
+    gap:10px;
     position:relative;
   }
   .person-card.rookie{ border-left:4px solid var(--rookie); }
   .person-card .info{
+    width:93px; /* 編集ボタンの位置をここで揃える固定幅 */
+    flex-shrink:0;
     display:flex;
     flex-direction:column;
     gap:1px;
+  }
+  .person-card .name-row{
+    display:flex;
+    flex-direction:row;
+    align-items:center;
+    justify-content:space-between;
+    gap:2px;
     min-width:0;
   }
   .person-card .time{
@@ -321,28 +326,24 @@
     margin:0 1px;
   }
   .person-card .name{
+    flex:1;
     font-weight:600;
     white-space:nowrap;
     overflow:hidden;
     text-overflow:ellipsis;
-  }
-  .card-side{
-    display:flex;
-    flex-direction:column;
-    align-items:flex-end;
-    gap:4px;
-    flex-shrink:0;
+    min-width:0;
   }
   .person-card .badges{
     display:flex;
     flex-direction:column;
     align-items:flex-end;
     gap:4px;
+    flex-shrink:0;
   }
   .badge{
     font-size:13px;
     font-weight:600;
-    padding:3px 8px;
+    padding:2px 5px;
     border-radius:9px;
     font-family:var(--font-ui);
     white-space:nowrap;
@@ -362,9 +363,9 @@
 
   .edit-toggle{
     flex-shrink:0;
-    font-size:15px;
+    font-size:14px;
     line-height:1;
-    padding:3px 5px;
+    padding:2px 3px;
     border-radius:5px;
     border:none;
     background:transparent;
@@ -439,12 +440,12 @@
   }
 
   .overflow-panel{
-    width:250px;
+    width:190px;
     min-height:130px;
     background:var(--overflow-bg);
     border:1px solid #EEC9C4;
     border-radius:9px;
-    padding:12px;
+    padding:9px;
   }
   .overflow-panel h3{
     margin:0 0 10px;
