@@ -6,11 +6,18 @@
 (function (NS) {
   "use strict";
 
-  const { parseShiftRows, parseRookieRows, parseSecretRows, timeToMinutes } = NS.csv;
   const {
-    SEATS, seatExists, ADJACENCY, assignSeats, buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
+    parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
+    parseRookieRows, parseSecretRows, timeToMinutes,
+  } = NS.csv;
+  const {
+    SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas,
+    buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat,
   } = NS.algorithm;
+
+  const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+  const LEADER_ROWS = [1, 2, 3], LEADER_COLS = [1, 2, 3];
 
   // ---------- 表示用ヘルパー ----------
   // 座席番号の配列を、1〜2件なら番号を、3件以上なら「複数有」を返す（バッジ表示用）
@@ -31,10 +38,14 @@
 
   // ---------- アプリの状態 ----------
   const rawText = { shift: null, rookie: null, secret: null };
-  const appState = { seats: initEmptyState(), overflow: [], ruleIndexes: null, adjacentGroupLetters: null };
+  const appState = {
+    seats: initEmptyState(), early: initLeaderState(), late: initLeaderState(),
+    overflow: [], ruleIndexes: null, adjacentGroupLetters: null, currentDateLabel: null,
+  };
   let dragSource = null;
   let hasRunOnce = false;
   let editingLoc = null; // 現在手入力編集中のカードの位置（null なら誰も編集していない）
+  let shiftMonthly = null; // 月間シフトCSVのパース結果 { rows, logs, dates }
 
   // 何度も参照するDOM要素はここでまとめて取得しておく
   const els = {
@@ -42,6 +53,10 @@
     seatGrid: document.getElementById('seat-grid'),
     overflowList: document.getElementById('overflow-list'),
     overflowAppend: document.getElementById('overflow-append'),
+    dateSelect: document.getElementById('date-select'),
+    yearMonthLabel: document.getElementById('year-month-label'),
+    earlyGrid: document.getElementById('early-grid'),
+    lateGrid: document.getElementById('late-grid'),
   };
   // overflow-append は再描画のたびに作り直される要素ではないため、
   // ドロップ受付は最初に1回だけ登録する（毎回登録するとリスナーが積み重なってしまう）
@@ -51,6 +66,13 @@
     const seats = {};
     for (const s of SEATS) seats[s.key] = [null, null];
     return seats;
+  }
+
+  // 早番・遅番エリア用（3行×3列、1枠1名）
+  function initLeaderState() {
+    const s = {};
+    LEADER_ROWS.forEach(r => LEADER_COLS.forEach(c => { s[`${r}-${c}`] = null; }));
+    return s;
   }
 
   // ---------- ファイル読み込み ----------
@@ -75,9 +97,48 @@
     try {
       rawText[key] = await file.text();
       markFileLoaded(key, file.name);
+      if (key === 'shift') refreshShiftMonthly();
     } catch (e) {
       markFileFailed(key);
+      if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
     }
+  }
+
+  // 月間シフトCSVを読み込み直すたびに呼び、日付セレクタを更新する
+  function refreshShiftMonthly() {
+    shiftMonthly = parseShiftMonthlyRows(rawText.shift);
+    populateDateSelect(shiftMonthly);
+  }
+
+  // 「配置対象日」セレクタを、読み込んだ月間シフトCSVの日付一覧で埋める
+  function populateDateSelect(monthly) {
+    const select = els.dateSelect;
+    const ymLabel = els.yearMonthLabel;
+    const dates = (monthly && monthly.dates) || [];
+    select.innerHTML = '';
+    if (dates.length === 0) {
+      select.disabled = true;
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '（月間シフトCSV読み込み後に選択できます）';
+      select.appendChild(opt);
+      ymLabel.textContent = '';
+      return;
+    }
+    dates.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d;
+      const dt = new Date(d + 'T00:00:00');
+      opt.textContent = `${dt.getDate()}日（${WEEKDAY_NAMES[dt.getDay()]}）`;
+      select.appendChild(opt);
+    });
+    select.disabled = false;
+    ymLabel.textContent = yearMonthLabelFromDates(dates);
+  }
+
+  function formatDateLabel(dateStr) {
+    const dt = new Date(dateStr + 'T00:00:00');
+    return `${dt.getFullYear()}年${dt.getMonth() + 1}月${dt.getDate()}日（${WEEKDAY_NAMES[dt.getDay()]}）`;
   }
 
   function setupFileInput(inputId, key) {
@@ -154,18 +215,50 @@
     panel.classList.add('flash-highlight');
   }
 
+  // 抽出した1日分の行を、座席グリッド用（OPかつ夜勤でない）と
+  // 早番・遅番エリア用（役席・GL、夜勤かどうかは問わない）に振り分ける。
+  // 役割=OPかつ夜勤のスタッフは、今回のバージョンでは配置対象外（ver3.0で対応予定）。
+  function splitDayRows(dayRows) {
+    const opRows = [];
+    const leaderRows = [];
+    dayRows.forEach(r => {
+      if (r.role === 'OP') {
+        if (!r.nightShift) {
+          opRows.push({ name: r.name, start: r.start, end: r.end, startMin: r.startMin, endMin: r.endMin, frontOT: r.frontOT, backOT: r.backOT });
+        }
+        // 夜勤OPは今回は対象外（ver3.0で対応予定）
+      } else {
+        leaderRows.push({
+          name: r.name, start: r.start, end: r.end, startMin: r.startMin, endMin: r.endMin,
+          frontOT: r.frontOT, backOT: r.backOT, role: r.role, isLate: r.lateShift,
+        });
+      }
+    });
+    return { opRows, leaderRows };
+  }
+
   // ---------- 自動配置の実行 ----------
   document.getElementById('btn-run').addEventListener('click', () => {
     if (!rawText.shift || !rawText.rookie || !rawText.secret) {
-      alert('shift.csv / rookie.csv / secret.csv をすべて選択してください。');
+      alert('月間シフトCSV / rookie.csv / secret.csv をすべて選択してください。');
+      return;
+    }
+    if (!shiftMonthly || shiftMonthly.dates.length === 0) {
+      alert('月間シフトCSVを正しく読み込めませんでした。ファイルの形式をご確認ください。');
+      return;
+    }
+    const selectedDate = els.dateSelect.value;
+    if (!selectedDate) {
+      alert('配置対象日を選択してください。');
       return;
     }
 
-    const shiftParsed = parseShiftRows(rawText.shift);
     const rookieParsed = parseRookieRows(rawText.rookie);
     const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
+    const dayRows = rowsForDate(shiftMonthly.rows, selectedDate);
+    const { opRows, leaderRows } = splitDayRows(dayRows);
 
-    const allLogs = [...shiftParsed.logs, ...rookieParsed.logs, ...secretParsed.logs];
+    const allLogs = [...shiftMonthly.logs, ...rookieParsed.logs, ...secretParsed.logs];
 
     // 席固定・禁止席で同じ人が複数行に分かれている場合は、配置を実行せずに知らせる
     // （複数の座席は1行にまとめてスペース区切りで指定する仕様のため）
@@ -186,13 +279,17 @@
       if (!ok) return;
     }
 
-    const result = assignSeats(shiftParsed.rows, rookieParsed.rows, secretParsed.rows);
-    allLogs.push(...result.logs);
+    const seatResult = assignSeats(opRows, rookieParsed.rows, secretParsed.rows);
+    const leaderResult = assignLeaderAreas(leaderRows);
+    allLogs.push(...seatResult.logs, ...leaderResult.logs);
 
-    appState.seats = result.state;
-    appState.overflow = result.overflow;
+    appState.seats = seatResult.state;
+    appState.early = leaderResult.early;
+    appState.late = leaderResult.late;
+    appState.overflow = [...seatResult.overflow, ...leaderResult.overflow];
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
+    appState.currentDateLabel = formatDateLabel(selectedDate);
     hasRunOnce = true;
     editingLoc = null;
 
@@ -206,10 +303,11 @@
 
   // ---------- 描画（座席グリッド・あふれ） ----------
 
-  // 位置（座席のスロット or あふれの何番目か）が同じかどうか
+  // 位置（座席のスロット・早番/遅番エリアの枠・あふれの何番目か）が同じかどうか
   function locEquals(a, b) {
     if (!a || !b || a.type !== b.type) return false;
     if (a.type === 'seat') return a.seatKey === b.seatKey && a.slotIndex === b.slotIndex;
+    if (a.type === 'early' || a.type === 'late') return a.key === b.key;
     if (a.type === 'overflow') return a.index === b.index;
     return false;
   }
@@ -239,6 +337,13 @@
       for (let i = 0; i < 2; i++) {
         if (loc.type === 'seat' && loc.seatKey === s.key && loc.slotIndex === i) continue;
         const p = appState.seats[s.key][i];
+        if (p && p.name === name) return true;
+      }
+    }
+    for (const [areaType, areaState] of [['early', appState.early], ['late', appState.late]]) {
+      for (const key of Object.keys(areaState)) {
+        if (loc.type === areaType && loc.key === key) continue;
+        const p = areaState[key];
         if (p && p.name === name) return true;
       }
     }
@@ -273,6 +378,41 @@
     return b;
   }
 
+  // ✎編集ボタン（座席カード・早番/遅番カードで共通）
+  function createEditToggleButton(loc) {
+    const editToggle = document.createElement('button');
+    editToggle.type = 'button';
+    editToggle.className = 'edit-toggle';
+    editToggle.textContent = '✎';
+    editToggle.setAttribute('aria-label', '氏名・時間を編集');
+    editToggle.title = '氏名・時間を編集';
+    // 編集ボタンからドラッグが始まって、カードごと動いてしまわないようにする
+    editToggle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
+    editToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      editingLoc = loc;
+      render();
+      const nameField = document.querySelector('.edit-form .edit-name');
+      if (nameField) { nameField.focus(); nameField.select(); }
+    });
+    return editToggle;
+  }
+
+  // 時刻1つ分の表示。残業（前残業/後残業）の場合は黄色ハイライト+「※」マークを付ける
+  function makeTimeSpan(text, isOT) {
+    const span = document.createElement('span');
+    span.textContent = text;
+    if (isOT) {
+      span.classList.add('ot-time');
+      span.title = '残業';
+      const mark = document.createElement('sup');
+      mark.className = 'ot-mark';
+      mark.textContent = '※';
+      span.appendChild(mark);
+    }
+    return span;
+  }
+
   function createPersonCard(loc, person) {
     const card = document.createElement('div');
     card.className = 'person-card' + (person.isRookie ? ' rookie' : '');
@@ -289,38 +429,18 @@
     nameLine.textContent = truncateName(person.name);
     nameLine.title = person.name; // 省略されている場合でも、全体をツールチップで確認できるようにする
     nameRow.appendChild(nameLine);
-
-    const editToggle = document.createElement('button');
-    editToggle.type = 'button';
-    editToggle.className = 'edit-toggle';
-    editToggle.textContent = '✎';
-    editToggle.setAttribute('aria-label', '氏名・時間を編集');
-    editToggle.title = '氏名・時間を編集';
-    // 編集ボタンからドラッグが始まって、カードごと動いてしまわないようにする
-    editToggle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
-    editToggle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      editingLoc = loc;
-      render();
-      const nameField = document.querySelector('.edit-form .edit-name');
-      if (nameField) { nameField.focus(); nameField.select(); }
-    });
-    nameRow.appendChild(editToggle);
+    nameRow.appendChild(createEditToggleButton(loc));
 
     info.appendChild(nameRow);
 
     const timeLine = document.createElement('div');
     timeLine.className = 'time';
-    const startSpan = document.createElement('span');
-    startSpan.textContent = person.start;
+    timeLine.appendChild(makeTimeSpan(person.start, person.frontOT));
     const sepSpan = document.createElement('span');
     sepSpan.className = 'time-sep';
     sepSpan.textContent = '-';
-    const endSpan = document.createElement('span');
-    endSpan.textContent = person.end;
-    timeLine.appendChild(startSpan);
     timeLine.appendChild(sepSpan);
-    timeLine.appendChild(endSpan);
+    timeLine.appendChild(makeTimeSpan(person.end, person.backOT));
     info.appendChild(timeLine);
 
     card.appendChild(info);
@@ -342,6 +462,44 @@
       badges.appendChild(makeBadge('lock', '隣禁止', person.adjacentGroupLetter || ''));
     }
     card.appendChild(badges);
+
+    card.addEventListener('dragstart', (e) => {
+      dragSource = loc;
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    return card;
+  }
+
+  // 早番・遅番エリア用のカード（役席・GL）。座席カードより幅が狭いため縦積みレイアウトにする。
+  function createLeaderCard(loc, person) {
+    const card = document.createElement('div');
+    card.className = 'leader-card';
+    card.draggable = true;
+
+    const nameRow = document.createElement('div');
+    nameRow.className = 'leader-name-row';
+    const nameLine = document.createElement('span');
+    nameLine.className = 'leader-name';
+    nameLine.textContent = truncateName(person.name);
+    nameLine.title = person.name;
+    nameRow.appendChild(nameLine);
+    nameRow.appendChild(createEditToggleButton(loc));
+    card.appendChild(nameRow);
+
+    const roleBadge = document.createElement('span');
+    roleBadge.className = 'leader-role-badge ' + (person.role === '役席' ? 'yakuseki' : 'gl');
+    roleBadge.textContent = person.role || '';
+    card.appendChild(roleBadge);
+
+    const timeLine = document.createElement('div');
+    timeLine.className = 'leader-time';
+    timeLine.appendChild(makeTimeSpan(person.start, person.frontOT));
+    const sepSpan = document.createElement('span');
+    sepSpan.className = 'time-sep';
+    sepSpan.textContent = '-';
+    timeLine.appendChild(sepSpan);
+    timeLine.appendChild(makeTimeSpan(person.end, person.backOT));
+    card.appendChild(timeLine);
 
     card.addEventListener('dragstart', (e) => {
       dragSource = loc;
@@ -460,11 +618,15 @@
 
   function getPersonAt(loc) {
     if (loc.type === 'seat') return appState.seats[loc.seatKey][loc.slotIndex];
+    if (loc.type === 'early') return appState.early[loc.key];
+    if (loc.type === 'late') return appState.late[loc.key];
     if (loc.type === 'overflow') return appState.overflow[loc.index];
     return null;
   }
   function setPersonAt(loc, person) {
     if (loc.type === 'seat') appState.seats[loc.seatKey][loc.slotIndex] = person;
+    else if (loc.type === 'early') appState.early[loc.key] = person;
+    else if (loc.type === 'late') appState.late[loc.key] = person;
     else if (loc.type === 'overflow') appState.overflow[loc.index] = person;
   }
 
@@ -537,6 +699,42 @@
     }
   }
 
+  // 早番・遅番エリア（3行×3列、1枠1名）を描画する
+  function renderLeaderGrid(containerEl, areaType, numberPrefix) {
+    if (!containerEl) return;
+    containerEl.innerHTML = '';
+    const stateObj = appState[areaType];
+    let n = 0;
+    LEADER_ROWS.forEach(row => {
+      LEADER_COLS.forEach(col => {
+        n++;
+        const key = `${row}-${col}`;
+        const loc = { type: areaType, key };
+        const cell = document.createElement('div');
+        cell.className = 'leader-cell';
+
+        const coord = document.createElement('div');
+        coord.className = 'leader-coord';
+        coord.textContent = `${numberPrefix}${n}`;
+        cell.appendChild(coord);
+
+        const slot = document.createElement('div');
+        slot.className = 'leader-slot';
+        const person = stateObj[key];
+        if (person) {
+          slot.classList.add('filled');
+          slot.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createLeaderCard(loc, person));
+        } else {
+          slot.textContent = '空き';
+        }
+        makeDropTarget(slot, loc);
+        cell.appendChild(slot);
+
+        containerEl.appendChild(cell);
+      });
+    });
+  }
+
   function renderOverflow() {
     const list = els.overflowList;
     list.innerHTML = '';
@@ -558,6 +756,8 @@
   }
 
   function render() {
+    renderLeaderGrid(els.earlyGrid, 'early', '早');
+    renderLeaderGrid(els.lateGrid, 'late', '遅');
     renderSeatGrid();
     renderOverflow();
   }
@@ -632,17 +832,49 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // 残業（前残業/後残業）の時刻表示。黄色背景（対応していれば）＋点線下線＋「※」マークの二重の目印にする
+  // （ブラウザの「背景のグラフィック」印刷設定がオフでも、下線とマークは必ず印刷される）
+  function printTimeSpan(text, isOT) {
+    if (!isOT) return `<span class="pt">${escapeHtml(text)}</span>`;
+    return `<span class="pt ot">${escapeHtml(text)}<sup class="ot-mark">※</sup></span>`;
+  }
+
   // 座席1枠内の「1人分」を描画する。人がいなければ空のまま（枠の大きさは常に揃える）
   function printOccupantHtml(p) {
     if (!p) return '<div class="print-occupant"></div>';
     return '<div class="print-occupant">'
       + `<div class="print-name">${escapeHtml(p.name)}</div>`
-      + `<div class="print-time">${escapeHtml(p.start)} - ${escapeHtml(p.end)}</div>`
+      + `<div class="print-time">${printTimeSpan(p.start, p.frontOT)}<span class="pt-sep">-</span>${printTimeSpan(p.end, p.backOT)}</div>`
       + '<div class="print-blank"></div>'
       + '</div>';
   }
 
+  // 早番・遅番エリア（3行×3列）を1つ分描画する
+  function printLeaderColumnHtml(stateObj, label, numberPrefix) {
+    let n = 0;
+    let cellsHtml = '';
+    LEADER_ROWS.forEach(row => {
+      LEADER_COLS.forEach(col => {
+        n++;
+        const p = stateObj[`${row}-${col}`];
+        cellsHtml += `<div class="print-leader-cell"><div class="coord">${numberPrefix}${n}</div>`;
+        if (p) {
+          cellsHtml += `<div class="print-leader-name">${escapeHtml(p.name)}</div>`
+            + `<div class="print-leader-role">${escapeHtml(p.role || '')}</div>`
+            + `<div class="print-leader-time">${printTimeSpan(p.start, p.frontOT)}<span class="pt-sep">-</span>${printTimeSpan(p.end, p.backOT)}</div>`;
+        }
+        cellsHtml += '</div>';
+      });
+    });
+    return `<div class="print-leader-col"><h3>${escapeHtml(label)}</h3><div class="print-leader-grid">${cellsHtml}</div></div>`;
+  }
+
   function buildPrintHtml(dateLabel, generatedLabel) {
+    const leaderHtml = '<div class="print-leader-section">'
+      + printLeaderColumnHtml(appState.early, '早番', '早')
+      + printLeaderColumnHtml(appState.late, '遅番', '遅')
+      + '</div>';
+
     let gridHtml = '<div class="print-grid">';
     for (let row = 1; row <= 4; row++) {
       for (let col = 1; col <= 4; col++) {
@@ -665,6 +897,12 @@
     }
     // ※ 一覧のレイアウト（1行3列）は <style> 側の .print-overflow ul で指定
 
+    // 残業（※マーク）が1件でもあれば、意味を説明する凡例を表示する
+    const hasAnyOT = SEATS.some(s => (appState.seats[s.key] || []).some(p => p && (p.frontOT || p.backOT)))
+      || Object.values(appState.early).some(p => p && (p.frontOT || p.backOT))
+      || Object.values(appState.late).some(p => p && (p.frontOT || p.backOT));
+    const legendHtml = hasAnyOT ? '<div class="print-legend">※…残業（前残業＝出勤時刻／後残業＝退勤時刻）</div>' : '';
+
     return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -675,7 +913,17 @@
   * { box-sizing: border-box; }
   body { font-family: "Yu Gothic UI","Meiryo","Hiragino Kaku Gothic ProN",sans-serif; color:#222; margin:0; }
   .print-generated { text-align:right; font-size:11px; color:#999; margin-bottom:2mm; }
-  .print-title { text-align:center; font-size:26px; font-weight:700; margin-bottom:10mm; }
+  .print-title { text-align:center; font-size:24px; font-weight:700; margin-bottom:5mm; }
+  .print-legend { font-size:10.5px; color:#777; text-align:right; margin:-2mm 0 3mm; }
+  .print-leader-section { display:flex; gap:5mm; width:182mm; margin-bottom:5mm; }
+  .print-leader-col { width:88.5mm; }
+  .print-leader-col h3 { font-size:12.5px; margin:0 0 1.5mm; color:#333; }
+  .print-leader-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:2.5mm; }
+  .print-leader-cell { position:relative; border:1px solid #555; border-radius:2mm; height:14mm; padding:2.5mm 1.5mm 1mm; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; overflow:hidden; }
+  .print-leader-cell .coord { position:absolute; top:0.6mm; right:1mm; font-size:7.5px; color:#999; line-height:1; }
+  .print-leader-name { font-size:10.5px; font-weight:700; line-height:1.15; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .print-leader-role { font-size:8px; color:#666; margin-top:0.3mm; }
+  .print-leader-time { font-size:9px; color:#555; margin-top:0.3mm; }
   .print-grid { display:grid; grid-template-columns:repeat(4, 41.75mm); width:182mm; gap:5mm; }
   .print-seat { position:relative; border:1px solid #333; border-radius:3mm; padding:5mm 3mm 3mm 3mm; height:48mm; display:flex; flex-direction:column; }
   .print-spacer { border:none; }
@@ -683,6 +931,10 @@
   .print-occupant { flex:1 1 0; display:flex; flex-direction:column; min-height:0; padding-top:1mm; text-align:center; }
   .print-name { font-size:16px; font-weight:600; }
   .print-time { font-size:15px; color:#555; margin-top:0.5mm; }
+  .print-time .pt.ot { font-weight:700; background:#FFF6CC; border-bottom:1.5px dotted #333; border-radius:0.5mm; padding:0 0.5mm; }
+  .print-time .ot-mark, .print-leader-time .ot-mark { font-size:8px; vertical-align:top; margin-left:0.3mm; }
+  .print-leader-time .pt.ot { font-weight:700; background:#FFF6CC; border-bottom:1.2px dotted #333; }
+  .pt-sep { margin:0 0.5mm; color:#777; }
   .print-blank { flex:1; border-bottom:1px dotted #bbb; margin:1mm 3mm 1mm 3mm; }
   .print-divider { border-top:1px dashed #999; margin:0.5mm 0; flex:0 0 auto; }
   .print-overflow { margin-top:8mm; }
@@ -698,6 +950,8 @@
   <div class="no-print"><button onclick="window.print()">この内容を印刷する</button></div>
   <div class="print-generated">出力: ${escapeHtml(generatedLabel)}</div>
   <div class="print-title">${escapeHtml(dateLabel)} 座席表</div>
+  ${legendHtml}
+  ${leaderHtml}
   ${gridHtml}
   ${overflowHtml}
 </body>
@@ -707,7 +961,8 @@
   document.getElementById('btn-print').addEventListener('click', () => {
     const today = new Date();
     const pad = n => String(n).padStart(2, '0');
-    const defaultLabel = `${today.getFullYear()}年${pad(today.getMonth() + 1)}月${pad(today.getDate())}日`;
+    const todayLabel = `${today.getFullYear()}年${pad(today.getMonth() + 1)}月${pad(today.getDate())}日`;
+    const defaultLabel = appState.currentDateLabel || todayLabel;
     const dateLabel = prompt('座席表の日付を入力してください（前日に準備する場合などはご自由に変更してください）', defaultLabel);
     if (dateLabel === null) return; // キャンセル
 

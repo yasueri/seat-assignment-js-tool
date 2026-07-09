@@ -55,41 +55,111 @@ window.SeatTool.csv = (function () {
     }
   }
 
-  // ---------- shift.csv ----------
-  function parseShiftRows(text) {
+  // ---------- 夜勤・遅番の判定 ----------
+  // 夜勤: 開始時刻が22:00より遅い、または終了時刻が26:00より遅い（日跨ぎの延長表記。例: 32:00 = 翌8:00）
+  // 対象は役割=OPのスタッフのみ。既存の座席グリッドには配置しない（ver3.0で対応予定）。
+  const NIGHT_START_THRESHOLD = timeToMinutes('22:00'); // 1320
+  const NIGHT_END_THRESHOLD = timeToMinutes('26:00');   // 1560
+  function isNightShift(startMin, endMin) {
+    return startMin > NIGHT_START_THRESHOLD || endMin > NIGHT_END_THRESHOLD;
+  }
+
+  // 遅番: 開始時刻が12:00以降、または（前残業がTRUEかつ開始時刻が10:00以降）
+  // 対象は役割=役席・GLのスタッフの「早番エリア」「遅番エリア」振り分けに使用する。
+  const LATE_START_THRESHOLD = timeToMinutes('12:00');      // 720
+  const LATE_OT_START_THRESHOLD = timeToMinutes('10:00');   // 600
+  function isLateShift(startMin, frontOT) {
+    return startMin >= LATE_START_THRESHOLD || (!!frontOT && startMin >= LATE_OT_START_THRESHOLD);
+  }
+
+  // ---------- 前残業・後残業（TRUE/FALSE） ----------
+  function parseBoolFlag(raw, name, colLabel, rowLabel, logs) {
+    const v = String(raw == null ? '' : raw).trim().toUpperCase();
+    if (v === 'TRUE') return true;
+    if (v === 'FALSE' || v === '') return false;
+    logs.push({ level: 'warn', message: `${rowLabel}: ${colLabel}の値「${raw}」を認識できないため「FALSE」として扱いました（${name}）` });
+    return false;
+  }
+
+  // ---------- 月間シフトCSV ----------
+  // 列: 日付,氏名,開始時刻,終了時刻,前残業,後残業,役割
+  // 1か月分の全出勤情報を受け取り、日付ごとに抽出できる形で返す。
+  // 役割は「役席」「GL」「OP」のいずれか。
+  function parseShiftMonthlyRows(text) {
     const logs = [];
     const raw = parseCSV(text);
-    checkHeader(raw, ['氏名', '出勤時刻', '退勤時刻'], 'shift.csv', logs);
+    checkHeader(raw, ['日付', '氏名', '開始時刻', '終了時刻', '前残業', '後残業', '役割'], '月間シフトCSV', logs);
 
     const dataRows = raw.slice(1);
     const result = [];
-    const seenNames = new Set();
+    const seenKeys = new Set(); // "日付|氏名" の重複チェック
+    const dateSet = new Set();
 
     dataRows.forEach((r, i) => {
-      const name = cell(r, 0);
-      const start = cell(r, 1);
-      const end = cell(r, 2);
-      if (!name) return;
+      const rowLabel = `月間シフトCSV ${i + 2}行目`;
+      const date = cell(r, 0);
+      const name = cell(r, 1);
+      const start = cell(r, 2);
+      const end = cell(r, 3);
+      const frontRaw = cell(r, 4);
+      const backRaw = cell(r, 5);
+      const role = cell(r, 6);
+      if (!date && !name) return; // 完全な空行
 
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        logs.push({ level: 'warn', message: `${rowLabel}: 日付の形式（YYYY-MM-DD）が不正なため読み飛ばしました（${date || '空欄'}）` });
+        return;
+      }
+      if (!name) {
+        logs.push({ level: 'warn', message: `${rowLabel}: 氏名が空欄のため読み飛ばしました` });
+        return;
+      }
       const startMin = timeToMinutes(start);
       const endMin = timeToMinutes(end);
       if (startMin == null || endMin == null) {
-        logs.push({ level: 'warn', message: `shift.csv ${i + 2}行目: 時刻の形式が不正なため読み飛ばしました（${name}）` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 時刻の形式が不正なため読み飛ばしました（${name}）` });
         return;
       }
       if (startMin >= endMin) {
-        logs.push({ level: 'warn', message: `shift.csv ${i + 2}行目: 出勤時刻が退勤時刻以降になっているため読み飛ばしました（${name}）` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 開始時刻が終了時刻以降になっているため読み飛ばしました（${name}）` });
         return;
       }
-      if (seenNames.has(name)) {
-        logs.push({ level: 'error', message: `shift.csv ${i + 2}行目: 「${name}」が複数回記載されています。同一人物として扱い、最初の行のみ使用します。` });
+      if (role !== '役席' && role !== 'GL' && role !== 'OP') {
+        logs.push({ level: 'warn', message: `${rowLabel}: 役割「${role}」は認識できません（役席・GL・OPのいずれか）。読み飛ばしました（${name}）` });
         return;
       }
-      seenNames.add(name);
-      result.push({ name, start, end, startMin, endMin });
+      const key = `${date}|${name}`;
+      if (seenKeys.has(key)) {
+        logs.push({ level: 'error', message: `${rowLabel}: ${date}の「${name}」が複数回記載されています。最初の行のみ使用します。` });
+        return;
+      }
+      seenKeys.add(key);
+
+      const frontOT = parseBoolFlag(frontRaw, name, '前残業', rowLabel, logs);
+      const backOT = parseBoolFlag(backRaw, name, '後残業', rowLabel, logs);
+
+      dateSet.add(date);
+      result.push({
+        date, name, start, end, startMin, endMin, role, frontOT, backOT,
+        nightShift: isNightShift(startMin, endMin),
+        lateShift: isLateShift(startMin, frontOT),
+      });
     });
 
-    return { rows: result, logs };
+    return { rows: result, logs, dates: Array.from(dateSet).sort() };
+  }
+
+  // 指定した日付の行だけを抜き出す
+  function rowsForDate(rows, date) {
+    return rows.filter(r => r.date === date);
+  }
+
+  // dates（ソート済みのYYYY-MM-DD配列）から「2026年6月」のようなラベルを作る
+  function yearMonthLabelFromDates(dates) {
+    if (!dates || dates.length === 0) return '';
+    const m = dates[0].match(/^(\d{4})-(\d{2})-\d{2}$/);
+    if (!m) return '';
+    return `${parseInt(m[1], 10)}年${parseInt(m[2], 10)}月`;
   }
 
   // ---------- rookie.csv ----------
@@ -194,6 +264,8 @@ window.SeatTool.csv = (function () {
 
   return {
     parseCSV, timeToMinutes,
-    parseShiftRows, parseRookieRows, parseSecretRows,
+    parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
+    isNightShift, isLateShift,
+    parseRookieRows, parseSecretRows,
   };
 })();
