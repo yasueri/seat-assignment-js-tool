@@ -343,9 +343,12 @@ window.SeatTool.algorithm = (function () {
   // 早番・遅番エリア（役席・GL専用。それぞれ3行×3列=9枠、1枠1名）
   // ・「遅番」判定（isLate）は呼び出し側で付与済みの値をそのまま使う
   //   （開始時刻が12:00以降、または前残業TRUEかつ開始時刻が10:00以降）
-  // ・各エリア内は「まず役席、次にGL」の順で、それぞれ出勤時刻が早い順に
-  //   （同時刻ならCSVで後ろの行の人を先に）1行目左から3人、2行目…と埋める
-  // ・9人を超える分は「あふれ」に回す
+  // ・通常時: 1行目=役席、2〜3行目=GL（それぞれ出勤時刻が早い順。同時刻ならCSVで
+  //   後ろの行の人が先）
+  // ・役席が4名以上、またはGLが7名以上で行の区切りに収まらない場合は、区切りを
+  //   設けず役席→GLの順に1マス目から続けて詰めて並べる
+  // ・合計9名を超える分（10人目以降）はどこにも配置せず、メッセージで知らせる
+  //   （あふれには入れない。実運用上まず発生しない想定のため）
   // ============================================================
   function emptyLeaderState() {
     const s = {};
@@ -353,40 +356,50 @@ window.SeatTool.algorithm = (function () {
     return s;
   }
 
-  function fillLeaderArea(stateObj, areaLabel, peopleList, overflow, logs) {
-    const order = [];
-    ['役席', 'GL'].forEach(role => {
-      const group = peopleList.filter(p => p.role === role);
-      group.sort(byStartTimeThenLaterRowFirst);
-      order.push(...group);
-    });
-    let idx = 0;
-    outer:
+  function fillLeaderArea(stateObj, peopleList, logs) {
+    const yakuseki = peopleList.filter(p => p.role === '役席').sort(byStartTimeThenLaterRowFirst);
+    const gl = peopleList.filter(p => p.role === 'GL').sort(byStartTimeThenLaterRowFirst);
+
+    const positions = new Array(9).fill(null);
+    let excessCount = 0;
+
+    if (yakuseki.length >= 4 || gl.length >= 7) {
+      // 行の区切りには収まらないため、役席→GLの順に1マス目から続けて詰める
+      const combined = [...yakuseki, ...gl];
+      combined.forEach((p, i) => { if (i < 9) positions[i] = p; });
+      excessCount = Math.max(0, combined.length - 9);
+    } else {
+      // 通常時: 1行目(0,1,2)=役席、2〜3行目(3〜8)=GL
+      // （この経路ではyakuseki<4・GL<7のため9枠に収まりきらないことはない）
+      yakuseki.forEach((p, i) => { positions[i] = p; });
+      gl.forEach((p, i) => { positions[3 + i] = p; });
+    }
+
+    let n = 0;
     for (let r = 1; r <= 3; r++) {
       for (let c = 1; c <= 3; c++) {
-        if (idx >= order.length) break outer;
-        stateObj[`${r}-${c}`] = order[idx];
-        idx++;
+        stateObj[`${r}-${c}`] = positions[n];
+        n++;
       }
     }
-    for (; idx < order.length; idx++) {
+
+    if (excessCount > 0) {
       logs.push({
-        level: 'info',
-        message: `${order[idx].name}さんは「${areaLabel}」エリアの配置枠（9人）を超えたため「あふれ」になりました。`,
+        level: 'error',
+        showDialog: true,
+        message: '役席・GLの合計が9名を超えており、配置できません。プリントアウト後に手書きしてください',
       });
-      overflow.push(order[idx]);
     }
   }
 
   /**
    * leaderRows: [{ name, start, end, startMin, endMin, frontOT, backOT, role:'役席'|'GL', isLate }]
    *   （役割が役席・GLのスタッフのみを渡すこと。日付抽出済みであること）
-   * 戻り値: { early, late, overflow, logs }
+   * 戻り値: { early, late, logs }
    *   early / late: { "行-列": 人 | null }（1〜3の3行×3列、1枠1名）
    */
   function assignLeaderAreas(leaderRows) {
     const logs = [];
-    const overflow = [];
     const early = emptyLeaderState();
     const late = emptyLeaderState();
 
@@ -394,10 +407,10 @@ window.SeatTool.algorithm = (function () {
     const earlyPeople = withIndex.filter(p => !p.isLate);
     const latePeople = withIndex.filter(p => p.isLate);
 
-    fillLeaderArea(early, '早番', earlyPeople, overflow, logs);
-    fillLeaderArea(late, '遅番', latePeople, overflow, logs);
+    fillLeaderArea(early, earlyPeople, logs);
+    fillLeaderArea(late, latePeople, logs);
 
-    return { early, late, overflow, logs };
+    return { early, late, logs };
   }
 
   return {
