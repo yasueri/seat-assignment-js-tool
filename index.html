@@ -9,23 +9,32 @@
 <body>
 
 <h1>座席配置ツール</h1>
-<p class="subtitle">shift.csv / rookie.csv / secret.csv を読み込んで自動配置し、必要に応じてドラッグ＆ドロップで調整します。</p>
+<p class="subtitle">月間シフトCSV / rookie.csv / secret.csv を読み込んで自動配置し、必要に応じてドラッグ＆ドロップで調整します。</p>
 
 <div class="panel">
   <h2><span class="step-num">1</span>CSV読み込み</h2>
 
   <div class="dropzone" id="csv-dropzone">
-    <p><strong>ここに shift.csv・rookie.csv・secret.csv をまとめてドラッグ&ドロップ</strong></p>
+    <p><strong>ここに 月間シフトCSV・rookie.csv・secret.csv をまとめてドラッグ&ドロップ</strong></p>
     <p class="dropzone-sub">ファイル名から自動的に振り分けます（ファイル名に shift / rookie / secret のいずれかを含めてください）</p>
   </div>
   <p class="dropzone-or">または、個別に選択:</p>
 
   <div class="file-row">
-    <label class="file-btn" for="file-shift">出勤リスト選択</label>
+    <label class="file-btn" for="file-shift">月間シフトCSV選択</label>
     <input type="file" id="file-shift" accept=".csv" class="visually-hidden">
-    <span class="file-name-label">shift.csv</span>
+    <span class="file-name-label">例: 2026-06_shift.csv</span>
     <span class="file-status empty" id="status-shift">未読み込み</span>
   </div>
+
+  <div class="date-picker-row" id="date-picker-row">
+    <label class="date-picker-label" for="date-select">配置対象日</label>
+    <span class="year-month-label" id="year-month-label"></span>
+    <select id="date-select" class="date-select" disabled>
+      <option value="">（月間シフトCSV読み込み後に選択できます）</option>
+    </select>
+  </div>
+
   <div class="file-row">
     <label class="file-btn" for="file-rookie">新人リスト選択</label>
     <input type="file" id="file-rookie" accept=".csv" class="visually-hidden">
@@ -47,13 +56,28 @@
     <summary>CSVの形式について</summary>
     <div class="help-content">
 
-    <strong>shift.csv</strong>（ヘッダー行あり・UTF-8）
+    <strong>月間シフトCSV</strong>（ヘッダー行あり・UTF-8。1か月分の全出勤情報をまとめて読み込みます）
     <table>
-      <tr><th>氏名</th><th>出勤時刻</th><th>退勤時刻</th></tr>
-      <tr><td>山田太郎</td><td>9:00</td><td>18:00</td></tr>
+      <tr><th>日付</th><th>氏名</th><th>開始時刻</th><th>終了時刻</th><th>前残業</th><th>後残業</th><th>役割</th></tr>
+      <tr><td>2026-06-01</td><td>山田太郎</td><td>7:30</td><td>16:30</td><td>FALSE</td><td>FALSE</td><td>役席</td></tr>
+      <tr><td>2026-06-01</td><td>後藤四郎</td><td>11:00</td><td>22:00</td><td>TRUE</td><td>FALSE</td><td>OP</td></tr>
+      <tr><td>2026-06-01</td><td>佐藤花子</td><td>22:00</td><td>32:00</td><td>FALSE</td><td>FALSE</td><td>GL</td></tr>
     </table>
+    <p>
+      日付は <code>YYYY-MM-DD</code> 形式。読み込み後、「配置対象日」で日を選ぶとその日の出勤者だけを抽出します（年月はCSVから自動表示）。<br>
+      終了時刻が24:00を超える場合は日跨ぎを表します（例: 開始22:00・終了32:00 → 当日22:00に出勤し翌日8:00に退勤）。<br>
+      前残業・後残業は <code>TRUE</code> / <code>FALSE</code> で入力してください。前残業=開始時刻が残業、後残業=終了時刻が残業という意味です（カード上で時刻が黄色く表示されます）。<br>
+      役割は「役席」「GL」「OP」のいずれかです。
+    </p>
+    <p>
+      <strong>役割ごとの配置先</strong><br>
+      OP かつ 夜勤でないスタッフ … 下の座席グリッド（全15席）に自動配置されます。<br>
+      　※夜勤（開始時刻が22:00より遅い、または終了時刻が26:00より遅いスタッフ）は今回のバージョンでは配置対象外です（対応予定）。<br>
+      役席・GL … 座席グリッド上部の「早番」「遅番」エリア（各3行×3列＝9名まで）に、まず役席、次にGLの順、出勤時刻が早い順に配置されます。<br>
+      　※遅番＝開始時刻が12:00以降、または前残業がTRUEかつ開始時刻が10:00以降のスタッフ。それ以外は早番エリアに配置されます。
+    </p>
 
-    <strong>rookie.csv</strong>（ヘッダー行あり）数値が小さいほど新人。同数値の場合は shift.csv の後ろの行の人がより新人として扱われます。
+    <strong>rookie.csv</strong>（ヘッダー行あり）数値が小さいほど新人。同数値の場合は月間シフトCSVでその日の後ろの行の人がより新人として扱われます。（対象はOPのみ）
     <table>
       <tr><th>氏名</th><th>新人度合い</th></tr>
       <tr><td>山田太郎</td><td>1</td></tr>
@@ -107,10 +131,22 @@
       <tr><td>隣禁止</td><td>隣接禁止ルールの対象者。同じ相手同士には同じアルファベット（A・B・C…）が付く</td></tr>
     </table>
     <p>
-      配置しきれなかったスタッフは、右の「あふれ」欄に表示されます。
+      出退勤時刻が黄色い場合は、その時刻が残業（前残業／後残業）であることを示します。<br>
+      配置しきれなかったスタッフは、右の「あふれ」欄に表示されます。上部の「早番」「遅番」エリア（9名まで）に入りきらなかった役席・GLも同様に「あふれ」に入ります。
     </p>
     </div>
   </details>
+
+  <div class="leader-areas">
+    <div class="leader-area">
+      <h3>早番</h3>
+      <div class="leader-grid" id="early-grid"></div>
+    </div>
+    <div class="leader-area">
+      <h3>遅番</h3>
+      <div class="leader-grid" id="late-grid"></div>
+    </div>
+  </div>
 
   <div class="layout">
     <div class="seat-grid" id="seat-grid"></div>
