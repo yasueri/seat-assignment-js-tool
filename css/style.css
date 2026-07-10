@@ -295,10 +295,6 @@
     gap:8px;
   }
   .leader-cell{
-    background:#fff;
-    border:1px solid var(--border);
-    border-radius:8px;
-    padding:6px;
     display:flex;
     flex-direction:column;
   }
@@ -340,6 +336,10 @@
     justify-content:space-between;
     gap:2px;
     min-width:0;
+  }
+  .leader-name-row .edit-toggle{
+    position:relative;
+    left:-10px;
   }
   .leader-name{
     flex:1;

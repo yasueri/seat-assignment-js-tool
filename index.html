@@ -21,6 +21,18 @@
   <p class="dropzone-or">または、個別に選択:</p>
 
   <div class="file-row">
+    <label class="file-btn" for="file-rookie">新人リスト選択</label>
+    <input type="file" id="file-rookie" accept=".csv" class="visually-hidden">
+    <span class="file-name-label">rookie.csv</span>
+    <span class="file-status empty" id="status-rookie">未読み込み</span>
+  </div>
+  <div class="file-row">
+    <label class="file-btn" for="file-secret">配慮リスト選択</label>
+    <input type="file" id="file-secret" accept=".csv" class="visually-hidden">
+    <span class="file-name-label">secret.csv</span>
+    <span class="file-status empty" id="status-secret">未読み込み</span>
+  </div>
+  <div class="file-row">
     <label class="file-btn" for="file-shift">月間シフトCSV選択</label>
     <input type="file" id="file-shift" accept=".csv" class="visually-hidden">
     <span class="file-name-label">例: 2026-06_shift.csv</span>
@@ -35,21 +47,8 @@
     </select>
   </div>
 
-  <div class="file-row">
-    <label class="file-btn" for="file-rookie">新人リスト選択</label>
-    <input type="file" id="file-rookie" accept=".csv" class="visually-hidden">
-    <span class="file-name-label">rookie.csv</span>
-    <span class="file-status empty" id="status-rookie">未読み込み</span>
-  </div>
-  <div class="file-row">
-    <label class="file-btn" for="file-secret">配置ルール選択</label>
-    <input type="file" id="file-secret" accept=".csv" class="visually-hidden">
-    <span class="file-name-label">secret.csv</span>
-    <span class="file-status empty" id="status-secret">未読み込み</span>
-  </div>
-
   <div class="actions">
-    <button id="btn-run">自動配置を実行</button>
+    <button id="btn-run" disabled>自動配置を実行</button>
   </div>
 
   <details class="help">
@@ -73,9 +72,8 @@
       <strong>役割ごとの配置先</strong><br>
       OP かつ 夜勤でないスタッフ … 下の座席グリッド（全15席）に自動配置されます。<br>
       　※夜勤（開始時刻が22:00より遅い、または終了時刻が26:00より遅いスタッフ）は今回のバージョンでは配置対象外です（対応予定）。<br>
-      役席・GL … 座席グリッド上部の「早番」「遅番」エリア（各3行×3列＝9名まで）に、通常は1行目に役席、2〜3行目にGLを出勤時刻が早い順に配置します。<br>
-      　※役席が4名以上、またはGLが7名以上で行に収まらない場合は、行の区切りをやめて役席→GLの順に1マス目から続けて配置します。<br>
-      　※役席・GLの合計が9名を超える分（10人目以降）はどこにも配置されず、メッセージで知らせます。<br>
+      役席・GL … 座席グリッド上部の「早番」「遅番」エリア（各2行×3列＝6名まで）に、役席→GLの順に1マス目から出勤時刻が早い順に詰めて配置します。<br>
+      　※役席・GLの合計が6名を超える分（7人目以降）はどこにも配置されず、メッセージで知らせます。<br>
       　※遅番＝開始時刻が12:00以降、または前残業がTRUEかつ開始時刻が10:00以降のスタッフ。それ以外は早番エリアに配置されます。
     </p>
 
@@ -117,7 +115,7 @@
 </div>
 
 <div class="panel">
-  <h2><span class="step-num">3</span>座席配置（ドラッグ＆ドロップで人単位の入れ替えができます）</h2>
+  <h2><span class="step-num">3</span>日勤 座席配置（ドラッグ＆ドロップで人単位の入れ替えができます）</h2>
 
   <details class="help">
     <summary>座席カードの見かたについて</summary>
@@ -134,7 +132,7 @@
     </table>
     <p>
       出退勤時刻が黄色い場合は、その時刻が残業（前残業／後残業）であることを示します。<br>
-      配置しきれなかったスタッフ（OP）は、右の「あふれ」欄に表示されます。早番・遅番エリアの9名を超えた役席・GLは「あふれ」には入らず、専用のメッセージで知らせます。
+      配置しきれなかったスタッフ（OP）は、右の「あふれ」欄に表示されます。早番・遅番エリアの6名を超えた役席・GLは「あふれ」には入らず、専用のメッセージで知らせます。
     </p>
     </div>
   </details>

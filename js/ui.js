@@ -17,7 +17,7 @@
   } = NS.algorithm;
 
   const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
-  const LEADER_ROWS = [1, 2, 3], LEADER_COLS = [1, 2, 3];
+  const LEADER_ROWS = [1, 2], LEADER_COLS = [1, 2, 3];
 
   // ---------- 表示用ヘルパー ----------
   // 座席番号の配列を、1〜2件なら番号を、3件以上なら「複数有」を返す（バッジ表示用）
@@ -123,6 +123,7 @@
       opt.textContent = '（月間シフトCSV読み込み後に選択できます）';
       select.appendChild(opt);
       ymLabel.textContent = '';
+      updateRunButtonState();
       return;
     }
     dates.forEach(d => {
@@ -134,7 +135,15 @@
     });
     select.disabled = false;
     ymLabel.textContent = yearMonthLabelFromDates(dates);
+    updateRunButtonState();
   }
+
+  // 「自動配置を実行」ボタンは、配置対象日が選ばれるまでグレーアウトしておく
+  function updateRunButtonState() {
+    const btnRun = document.getElementById('btn-run');
+    btnRun.disabled = !els.dateSelect.value;
+  }
+  els.dateSelect.addEventListener('change', updateRunButtonState);
 
   function formatDateLabel(dateStr) {
     const dt = new Date(dateStr + 'T00:00:00');
@@ -833,20 +842,17 @@
   }
 
   // 座席1枠内の「1人分」を描画する。人がいなければ空のまま（枠の大きさは常に揃える）
-  // coordLabel: 座席番号（1人目にだけ氏名と同じ行に表示する。2人目はnull）
-  // isLast: 2人目（枠の一番下）かどうか。手書き用の点線は2人目側にのみ付ける
-  //         （1人目側にも付けると、仕切り線と二重になって見えるため）
-  function printOccupantHtml(p, coordLabel, isLast) {
-    const nameRowHtml = coordLabel
-      ? `<div class="print-name-row"><span class="print-coord">${escapeHtml(coordLabel)}</span><span class="print-name">${p ? escapeHtml(p.name) : ''}</span></div>`
-      : (p ? `<div class="print-name">${escapeHtml(p.name)}</div>` : '<div class="print-name"></div>');
+  // coordLabel: 座席番号（1人目にだけ、氏名と同じ行の右端に表示する。2人目はnull）
+  // 手書き用の余白（線なし）は1人目・2人目とも残す
+  function printOccupantHtml(p, coordLabel) {
+    const coordHtml = coordLabel ? `<span class="print-coord">${escapeHtml(coordLabel)}</span>` : '';
     if (!p) {
-      return `<div class="print-occupant">${coordLabel ? `<div class="print-name-row"><span class="print-coord">${escapeHtml(coordLabel)}</span></div>` : ''}<div class="print-blank${isLast ? ' bordered' : ''}"></div></div>`;
+      return `<div class="print-occupant">${coordLabel ? `<div class="print-name-row">${coordHtml}</div>` : ''}<div class="print-blank"></div></div>`;
     }
     return '<div class="print-occupant">'
-      + nameRowHtml
+      + `<div class="print-name-row"><span class="print-name">${escapeHtml(p.name)}</span>${coordHtml}</div>`
       + `<div class="print-time">${printTimeSpan(p.start, p.frontOT)}<span class="pt-sep">-</span>${printTimeSpan(p.end, p.backOT)}</div>`
-      + `<div class="print-blank${isLast ? ' bordered' : ''}"></div>`
+      + '<div class="print-blank"></div>'
       + '</div>';
   }
 
@@ -866,7 +872,7 @@
         cellsHtml += '</div>';
       });
     });
-    return `<div class="print-leader-col"><h3>${escapeHtml(label)}</h3><div class="print-leader-frame"><div class="print-leader-grid">${cellsHtml}</div></div></div>`;
+    return `<div class="print-leader-col"><div class="print-leader-frame"><h3>${escapeHtml(label)}</h3><div class="print-leader-grid">${cellsHtml}</div></div></div>`;
   }
 
   function buildPrintHtml(dateLabel, generatedLabel) {
@@ -885,9 +891,9 @@
         const slots = appState.seats[`${row}-${col}`]; // [人 or null, 人 or null]（常に2枠）
         const style = `grid-column:${gridColumnOf(col)}; grid-row:${row};`;
         gridHtml += `<div class="print-seat" style="${style}">`
-          + printOccupantHtml(slots[0], String(numberOfSeat(row, col)), false)
+          + printOccupantHtml(slots[0], String(numberOfSeat(row, col)))
           + '<div class="print-divider"></div>'
-          + printOccupantHtml(slots[1], null, true)
+          + printOccupantHtml(slots[1], null)
           + '</div>';
       }
     }
@@ -911,43 +917,47 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>${escapeHtml(dateLabel)} 座席表</title>
+<title>${escapeHtml(dateLabel)} 日勤 座席表</title>
 <style>
-  @page { size: A4 portrait; margin: 14mm; }
+  @page { size: A4 portrait; margin: 4mm 14mm; }
   * { box-sizing: border-box; }
   body { font-family: "Yu Gothic UI","Meiryo","Hiragino Kaku Gothic ProN",sans-serif; color:#222; margin:0; }
-  .print-generated { text-align:right; font-size:11px; color:#999; margin-bottom:2mm; }
+  .print-generated { text-align:right; font-size:11px; color:#999; margin-bottom:0.5mm; }
   .print-title { text-align:center; font-size:24px; font-weight:700; margin-bottom:4mm; }
   .print-legend { font-size:10.5px; color:#777; text-align:right; margin:-2mm 0 2.5mm; }
 
   .print-leader-section { display:flex; gap:5mm; width:172mm; margin-bottom:4mm; }
   .print-leader-col { width:83.5mm; }
-  .print-leader-col h3 { font-size:12px; margin:0 0 1mm; color:#333; }
   .print-leader-frame { border:1px solid #888; border-radius:2mm; padding:1.3mm; }
+  .print-leader-frame h3 { font-size:12px; margin:0 0 1mm; color:#333; }
   .print-leader-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:0.8mm; }
   .print-leader-cell { border:1px solid #555; border-radius:1.5mm; height:16mm; padding:1mm 1mm 0.6mm; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; overflow:hidden; }
   .print-leader-name { font-size:16px; font-weight:600; line-height:1.15; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .print-leader-time { font-size:16px; color:#555; margin-top:0.3mm; white-space:nowrap; }
   .print-leader-blank { flex:1 1 auto; min-height:1mm; }
 
-  .print-grid { display:grid; grid-template-columns:41.75mm 41.75mm 5mm 41.75mm 41.75mm; grid-auto-rows:48mm; column-gap:0; row-gap:1mm; width:172mm; }
-  .print-seat { position:relative; border:1px solid #333; border-radius:3mm; padding:2mm 2.5mm; height:48mm; display:flex; flex-direction:column; }
-  .print-name-row { display:flex; align-items:baseline; justify-content:center; gap:1.3mm; }
-  .print-coord { font-size:12px; font-weight:700; color:#888; line-height:1; }
-  .print-occupant { flex:1 1 0; display:flex; flex-direction:column; min-height:0; padding-top:0.5mm; text-align:center; }
+  .print-grid { display:grid; grid-template-columns:41.75mm 41.75mm 5mm 41.75mm 41.75mm; grid-auto-rows:44mm; column-gap:0; row-gap:0; width:172mm; }
+  .print-seat { position:relative; border:1px solid #333; border-radius:3mm; padding:2mm 2.5mm; height:44mm; display:flex; flex-direction:column; }
+  .print-occupant { flex:1 1 0; display:flex; flex-direction:column; min-height:0; text-align:center; }
+  .print-name-row { position:relative; }
+  .print-coord { position:absolute; right:0; top:0; font-size:12px; font-weight:700; color:#888; line-height:1; }
   .print-name { font-size:16px; font-weight:600; }
   .print-time { font-size:16px; color:#555; margin-top:0.5mm; }
+  .print-blank { flex:1; }
+  /* 残業の目印: 画面でこのページを見ているときは黄色、実際に印刷（プレビュー含む）
+     するときは薄いグレーになる（@media print で上書き） */
   .print-time .pt.ot, .print-leader-time .pt.ot {
     font-weight:700; padding:0 0.6mm; border-radius:0.3mm;
-    background-color:#fff;
-    background-image: radial-gradient(circle, #666 30%, transparent 31%);
-    background-size: 1.1mm 1.1mm;
+    background-color:#FFF3B0;
+  }
+  @media print {
+    .print-time .pt.ot, .print-leader-time .pt.ot {
+      background-color:#D9D9D9;
+    }
   }
   .ot-mark { font-size:8px; vertical-align:top; margin-left:0.3mm; }
   .pt-sep { margin:0 0.5mm; color:#777; }
-  .print-blank { flex:1; margin:1mm 3mm 1mm 3mm; }
-  .print-blank.bordered { border-bottom:1px dotted #bbb; }
-  .print-divider { border-top:1px dashed #999; margin:0.5mm 0; flex:0 0 auto; }
+  .print-divider { border-top:1px dashed #999; }
   .print-overflow { margin-top:6mm; }
   .print-overflow h2 { font-size:16px; border-bottom:1px solid #333; padding-bottom:2mm; }
   .print-overflow ul { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3, 1fr); gap:1.5mm 6mm; }
@@ -960,7 +970,7 @@
 <body>
   <div class="no-print"><button onclick="window.print()">この内容を印刷する</button></div>
   <div class="print-generated">出力: ${escapeHtml(generatedLabel)}</div>
-  <div class="print-title">${escapeHtml(dateLabel)} 座席表</div>
+  <div class="print-title">${escapeHtml(dateLabel)} 日勤 座席表</div>
   ${legendHtml}
   ${leaderHtml}
   ${gridHtml}
