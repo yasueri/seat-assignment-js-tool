@@ -223,15 +223,23 @@
     <button id="btn-check" class="secondary multiline-btn"><span>手動変更後</span><span>配置違反チェック</span></button>
     <button id="btn-print" class="secondary multiline-btn"><span>印刷用ページ</span><span>を開く</span></button>
     <button id="btn-save" class="secondary multiline-btn"><span>現在の配置を</span><span>保存</span></button>
-    <button id="btn-load" class="secondary multiline-btn"><span>保存した配置を</span><span>読み込み</span></button>
+  </div>
+  <div class="date-picker-row save-load-row">
+    <span class="date-picker-label">保存した配置の読み込み</span>
+    <select id="save-select" class="date-select" disabled>
+      <option value="">（「一覧を更新」でsaveフォルダから取得します）</option>
+    </select>
+    <button id="btn-refresh-saves" class="secondary">一覧を更新</button>
+    <button id="btn-load" class="secondary">読み込み</button>
     <input type="file" id="file-load" accept=".json,application/json" class="visually-hidden">
   </div>
 
   <p class="footer-note">
     ドラッグ操作は配置ルールを自動チェックしません。手動で動かした後は「手動変更後 配置違反チェック」ボタンで違反がないか確認してください（日勤・夜勤の両方の座席グリッドのルール違反に加え、日勤・夜勤の入れ違い＝夜勤の人が日勤側にいる等や、夜勤の役席・GLがいるのに「夜勤GL」枠が空になっているケースも検出します）。<br>
     印刷用ページは、1ページ目＝日勤、2ページ目＝夜勤のA4各1枚で出力されます（両面コピー用）。<br>
-    「現在の配置を保存」で、いま表示中の配置（手動調整の内容を含む）をJSONファイルとして保存できます。「保存した配置を読み込み」でそのファイルを選ぶと、保存した時点の配置画面が復元されます（CSVの再読み込みは不要）。<br>
-    ※保存ファイルには、配置違反チェックのために secret.csv 由来のルール情報が含まれます。secret.csv と同様に取り扱いにご注意ください。<br>
+    「現在の配置を保存」で、いま表示中の配置（手動調整の内容を含む）を index.html のあるフォルダ内の save フォルダへJSONファイルとして保存します（saveフォルダがなければ自動で作成されます）。初回はブラウザのダイアログで「index.htmlのあるフォルダ」を選択し、アクセスを許可してください。<br>
+    「保存した配置の読み込み」は、「一覧を更新」でsaveフォルダ内の保存ファイルを取得し、選んで「読み込み」を押すと保存した時点の配置画面が復元されます。<br>
+    ※保存ファイルには secret.csv から推測できる情報（席固定・禁止席などのバッジ情報を含む）は一切含まれません。読み込み後に配置違反チェックやバッジ表示を使うには、別途 secret.csv の読み込みが必要です（既に読み込み済みなら自動的に適用されます）。<br>
     各カードの✎アイコンから、氏名・時間の手入力修正や、その日の配置からの削除ができます。
   </p>
 </div>
