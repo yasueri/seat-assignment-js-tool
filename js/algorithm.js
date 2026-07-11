@@ -86,6 +86,7 @@ window.SeatTool.algorithm = (function () {
     const adjacentRuleNames = new Set();
     const forbiddenSeatRuleNames = new Set();
     const designatedNames = new Set();
+    const nightGLDesignatedNames = new Set(); // 席固定「夜勤GL席」の対象者名
 
     for (const r of secretRows) {
       if (r.type === 'adjacent_forbidden') {
@@ -100,7 +101,13 @@ window.SeatTool.algorithm = (function () {
       } else if (r.type === 'seat_designated') {
         if (!designatedSeatsMap.has(r.name)) designatedSeatsMap.set(r.name, []);
         designatedSeatsMap.get(r.name).push(`${r.row}-${r.col}`);
-        designatedNames.add(r.name);
+        // silent=true は「secret.csvには由来しない、ツール内部の強制配置」用の印。
+        // designatedSeatsMap には加えて座席への強制配置自体は行うが、
+        // designatedNames には加えないため「席固定」バッジは表示されない
+        // （夜勤の役席・GLが2名以上のとき座席10へ回る人の配置に使用）。
+        if (!r.silent) designatedNames.add(r.name);
+      } else if (r.type === 'night_gl_designated') {
+        nightGLDesignatedNames.add(r.name);
       }
     }
 
@@ -110,48 +117,52 @@ window.SeatTool.algorithm = (function () {
     return {
       forbiddenPairSet, forbiddenSeatSet, forbiddenSeatsMap, designatedSeatsMap,
       adjacentRuleNames, forbiddenSeatRuleNames, designatedNames, priorityNames,
+      nightGLDesignatedNames,
     };
   }
 
   function isForbiddenPair(a, b, forbiddenPairSet) { return forbiddenPairSet.has(pairKey(a, b)); }
 
-  // 隣接禁止の対象者を、つながっているペアごとにグループ分けし、
-  // グループごとにA・B・C…の記号を割り当てる（バッジ表示用）。
-  // 例: A-B、B-C が禁止なら A・B・C は同じグループとして扱う。
+  // 隣接禁止の「ペア」ごとにA・B・C…の記号を割り当て、各対象者には
+  // 自分が属するペアの記号を並べたラベルを付ける（バッジ表示用）。
+  // 例: 短一-短三＝ペアA、短二-短三＝ペアB
+  //     → 短一:「A」、短二:「B」、短三:「AB」（AとBの両方に属する）
+  // 同じ記号を持つ人同士が「隣に座ってはいけない相手」を表す。
+  // 1人が4ペア以上に属する場合は記号を並べず「4以上」と表示する。
+  // ペアはsecret.csvの記載順に記号を振る（同じペアの重複行は1つと数える）。
   function buildAdjacentGroups(secretRows) {
-    const pairs = secretRows.filter(r => r.type === 'adjacent_forbidden').map(r => [r.name1, r.name2]);
-    const parent = new Map();
-    function find(x) {
-      if (!parent.has(x)) parent.set(x, x);
-      let root = x;
-      while (parent.get(root) !== root) root = parent.get(root);
-      let cur = x;
-      while (parent.get(cur) !== root) { const next = parent.get(cur); parent.set(cur, root); cur = next; }
-      return root;
-    }
-    function union(a, b) {
-      const ra = find(a), rb = find(b);
-      if (ra !== rb) parent.set(ra, rb);
-    }
-    pairs.forEach(([a, b]) => { find(a); find(b); union(a, b); });
-
-    const rootOrder = [];
-    const rootToMembers = new Map();
-    pairs.forEach(([a, b]) => {
-      [a, b].forEach(name => {
-        const root = find(name);
-        if (!rootToMembers.has(root)) { rootToMembers.set(root, new Set()); rootOrder.push(root); }
-        rootToMembers.get(root).add(name);
-      });
+    const seenPairs = new Set();
+    const pairs = [];
+    secretRows.filter(r => r.type === 'adjacent_forbidden').forEach(r => {
+      const key = pairKey(r.name1, r.name2);
+      if (seenPairs.has(key)) return;
+      seenPairs.add(key);
+      pairs.push([r.name1, r.name2]);
     });
 
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    const nameToLetter = new Map();
-    rootOrder.forEach((root, i) => {
-      const letter = i < letters.length ? letters[i] : `G${i + 1}`;
-      rootToMembers.get(root).forEach(name => { nameToLetter.set(name, letter); });
+    // 27ペア目以降は AA, AB, … と2文字になる（実運用上まず発生しない想定）
+    const letterOf = (index) => {
+      let s = '';
+      let i = index + 1;
+      while (i > 0) { i -= 1; s = letters[i % 26] + s; i = Math.floor(i / 26); }
+      return s;
+    };
+
+    const nameToLetters = new Map();
+    pairs.forEach(([a, b], i) => {
+      const letter = letterOf(i);
+      [a, b].forEach(name => {
+        if (!nameToLetters.has(name)) nameToLetters.set(name, []);
+        nameToLetters.get(name).push(letter);
+      });
     });
-    return nameToLetter; // name -> 'A' | 'B' | ...
+
+    const nameToLabel = new Map();
+    for (const [name, ls] of nameToLetters.entries()) {
+      nameToLabel.set(name, ls.length >= 4 ? '4以上' : ls.join(''));
+    }
+    return nameToLabel; // name -> 'A' | 'AB' | '4以上' | ...
   }
 
   // 座席1つに対して、この人を配置してよいか（容量・重複・ルール1・ルール2）
@@ -170,19 +181,25 @@ window.SeatTool.algorithm = (function () {
     return true;
   }
 
-  // 候補座席のリストの中から、ランダムな順で条件に合う最初の1つを返す
-  // （境界時刻ぴったりの相席になる席があれば、他に選べる席がある限り避ける）
-  function findSeatAmongCandidates(candidateSeats, person, state, forbiddenSeatSet, forbiddenPairSet) {
+  // 候補座席のリストの中から、ランダムな順で条件に合う最初の1つを返す。
+  // avoidAdjacency=true（夜勤専用）の場合、同列で隣接する座席に既に誰かいる候補は
+  // 他に選べる候補がある限り避ける（ソフトな優先度。境界時刻一致の回避と同様の扱い）。
+  // secret.csvの席固定などにより結果的に隣接してしまうのは許容する（エラーにしない）。
+  function findSeatAmongCandidates(candidateSeats, person, state, forbiddenSeatSet, forbiddenPairSet, avoidAdjacency) {
     const candidates = shuffle(candidateSeats);
-    const valid = candidates.filter(seat => canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet));
+    let valid = candidates.filter(seat => canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet));
     if (valid.length === 0) return null;
+    if (avoidAdjacency) {
+      const nonAdjacent = valid.filter(seat => !ADJACENCY[seat.key].some(adjKey => slotOccupants(state[adjKey]).length > 0));
+      if (nonAdjacent.length > 0) valid = nonAdjacent;
+    }
     const preferred = valid.filter(seat => !hasExactBoundaryMatch(person, slotOccupants(state[seat.key])));
     return (preferred.length > 0 ? preferred : valid)[0];
   }
 
   // 全15席の中から探す通常版（その他スタッフ・secret.csv対象者・フォールバック用）
-  function findSeat(person, state, forbiddenSeatSet, forbiddenPairSet) {
-    return findSeatAmongCandidates(SEATS, person, state, forbiddenSeatSet, forbiddenPairSet);
+  function findSeat(person, state, forbiddenSeatSet, forbiddenPairSet, avoidAdjacency) {
+    return findSeatAmongCandidates(SEATS, person, state, forbiddenSeatSet, forbiddenPairSet, avoidAdjacency);
   }
 
   function seatPerson(state, seatKey, person) {
@@ -201,8 +218,8 @@ window.SeatTool.algorithm = (function () {
   // 空席を探して座らせる。見つからなければログを残して「あふれ」に入れる。
   // isExpectedOverflow=true: 通常のあふれ（情報ログのみ）
   // isExpectedOverflow=false: 本来起きないはずの配置ルール矛盾（エラー+ダイアログ）
-  function placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, isExpectedOverflow) {
-    const seat = findSeat(person, state, forbiddenSeatSet, forbiddenPairSet);
+  function placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, isExpectedOverflow, avoidAdjacency) {
+    const seat = findSeat(person, state, forbiddenSeatSet, forbiddenPairSet, avoidAdjacency);
     if (seat) {
       seatPerson(state, seat.key, person);
     } else if (isExpectedOverflow) {
@@ -223,18 +240,28 @@ window.SeatTool.algorithm = (function () {
    * rookieRows: [{ name, degree }]
    * secretRows: [{ type:'adjacent_forbidden', name1, name2 }
    *              | { type:'seat_forbidden', name, row, col }
-   *              | { type:'seat_designated', name, row, col }]
+   *              | { type:'seat_designated', name, row, col }
+   *              | { type:'night_gl_designated', name }]
+   * options: { nightContext: boolean }（夜勤の座席配置を呼ぶ場合はtrue）
+   *   nightContext=true のとき、以下の2つが有効になる:
+   *     - 空席探索時に、同列で隣接する座席を（他に選べる候補がある限り）避ける
+   *       ソフトな優先度が働く（席固定などで結果的に隣接するのは許容し、
+   *       メッセージも出さない）
+   *     - secret.csvで「夜勤GL席」に席固定されている人が、選ばれず座席1〜15に
+   *       配置された場合、「夜勤GL席」バッジを表示するためのフラグが付く
    *
    * 戻り値: { state, overflow, logs }
    *   state: { "行-列": [人 | null, 人 | null] }
    *   overflow: 配置しきれなかった人の配列
    *   logs: [{ level:'info'|'warn'|'error', message, showDialog? }]
    */
-  function assignSeats(shiftRows, rookieRows, secretRows) {
+  function assignSeats(shiftRows, rookieRows, secretRows, options) {
+    const nightContext = !!(options && options.nightContext);
     const logs = [];
     const {
       forbiddenPairSet, forbiddenSeatSet, forbiddenSeatsMap, designatedSeatsMap,
       adjacentRuleNames, forbiddenSeatRuleNames, designatedNames, priorityNames,
+      nightGLDesignatedNames,
     } = buildSecretIndexes(secretRows);
     const adjacentGroupLetters = buildAdjacentGroups(secretRows);
 
@@ -250,6 +277,8 @@ window.SeatTool.algorithm = (function () {
       designatedSeatNumbers: (designatedSeatsMap.get(r.name) || []).map(numberOfKey),
       forbiddenSeatNumbers: (forbiddenSeatsMap.get(r.name) || []).map(numberOfKey),
       adjacentGroupLetter: adjacentGroupLetters.get(r.name) || null,
+      // 夜勤専用: 「夜勤GL席」に席固定されているが座席側に回ってきた人（バッジ表示用）
+      hasNightGLDesignation: nightContext && nightGLDesignatedNames.has(r.name),
     }));
     const byName = new Map(people.map(p => [p.name, p]));
 
@@ -274,7 +303,7 @@ window.SeatTool.algorithm = (function () {
       const candidateSeats = designatedSeatsMap.get(person.name)
         .map(key => SEATS.find(s => s.key === key))
         .filter(Boolean);
-      const seat = findSeatAmongCandidates(candidateSeats, person, state, forbiddenSeatSet, forbiddenPairSet);
+      const seat = findSeatAmongCandidates(candidateSeats, person, state, forbiddenSeatSet, forbiddenPairSet, nightContext);
       if (seat) {
         seatPerson(state, seat.key, person);
         placedNames.add(person.name);
@@ -284,7 +313,7 @@ window.SeatTool.algorithm = (function () {
           message: `${person.name}さんの配置条件をよく確認してください（指定された座席に配置できません）`,
         });
         // 指定席がどれもダメな場合は、通常探索にフォールバックする
-        placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false);
+        placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, nightContext);
       }
     }
 
@@ -317,7 +346,7 @@ window.SeatTool.algorithm = (function () {
 
     // 固定席に座れなかった新人は、通常探索で優先的に配置する（本来は起きない想定のため矛盾扱い）
     for (const person of fallbackQueue) {
-      placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false);
+      placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, nightContext);
     }
 
     // ---- 2. secret.csv 記載スタッフ（隣接禁止・禁止席の対象者。出勤時刻が早い順） ----
@@ -325,7 +354,7 @@ window.SeatTool.algorithm = (function () {
     priorityPeople.sort(byStartTimeThenLaterRowFirst);
 
     for (const person of priorityPeople) {
-      placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false);
+      placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, nightContext);
     }
 
     // ---- 3. その他スタッフ（出勤時刻が早い順） ----
@@ -333,7 +362,7 @@ window.SeatTool.algorithm = (function () {
     others.sort(byStartTimeThenLaterRowFirst);
 
     for (const person of others) {
-      placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, true);
+      placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, true, nightContext);
     }
 
     return { state, overflow, logs };
@@ -354,7 +383,7 @@ window.SeatTool.algorithm = (function () {
     return s;
   }
 
-  function fillLeaderArea(stateObj, peopleList, logs) {
+  function fillLeaderArea(stateObj, peopleList, logs, excessMessage) {
     const yakuseki = peopleList.filter(p => p.role === '役席').sort(byStartTimeThenLaterRowFirst);
     const gl = peopleList.filter(p => p.role === 'GL').sort(byStartTimeThenLaterRowFirst);
     const combined = [...yakuseki, ...gl];
@@ -375,10 +404,12 @@ window.SeatTool.algorithm = (function () {
       logs.push({
         level: 'error',
         showDialog: true,
-        message: '役席・GLの合計が6名を超えており、配置できません。プリントアウト後に手書きしてください',
+        message: excessMessage,
       });
     }
   }
+
+  const LEADER_EXCESS_MESSAGE = '役席・GLの合計が6名を超えており、配置できません。プリントアウト後に手書きしてください';
 
   /**
    * leaderRows: [{ name, start, end, startMin, endMin, frontOT, backOT, role:'役席'|'GL', isLate }]
@@ -395,16 +426,81 @@ window.SeatTool.algorithm = (function () {
     const earlyPeople = withIndex.filter(p => !p.isLate);
     const latePeople = withIndex.filter(p => p.isLate);
 
-    fillLeaderArea(early, earlyPeople, logs);
-    fillLeaderArea(late, latePeople, logs);
+    fillLeaderArea(early, earlyPeople, logs, LEADER_EXCESS_MESSAGE);
+    fillLeaderArea(late, latePeople, logs, LEADER_EXCESS_MESSAGE);
 
     return { early, late, logs };
+  }
+
+  // ============================================================
+  // 夜勤の役席・GLの配置（ver4.2）
+  // ・二重配置（GL枠＋座席の両方に表示）は行わない。日勤と同様に1人1か所へ配置する。
+  // ・1名のみの場合: 夜勤GL枠の「2行1列目」へ配置する
+  // ・2名以上の場合: 1名を夜勤GL枠2行1列目へ。
+  //     - secret.csvで席固定「夜勤GL席」に指定されている人を優先する
+  //     - 該当者が複数いる場合はその中からランダムに選出
+  //     - 該当者がいない場合は全員の中からランダムに選出
+  //   残りのうち先頭の1名（役席→GLの順・出勤時刻が早い順）は座席10へ、
+  //   3人目以降は空いている座席への通常配置（時刻順）に回す。
+  //   （座席10への強制配置は呼び出し側でsecret.csvへ一時的に追加する形で行う。
+  //   secret.csvには実在しない指定のため、呼び出し側でsilent:trueを付けることで
+  //   「席固定」バッジは表示させない）
+  // ============================================================
+  /**
+   * nightLeaderRows: [{ name, start, end, startMin, endMin, frontOT, backOT, role:'役席'|'GL' }]
+   * nightGLDesignatedNames: secret.csv「席固定・夜勤GL席」の対象者名の集合（Set）。
+   *   buildSecretIndexes(secretRows).nightGLDesignatedNames をそのまま渡せばよい
+   *   （その日出勤していない人が含まれていても、この関数内で自動的に絞り込まれる）
+   * 戻り値: {
+   *   glState,       … 夜勤GL枠（2行×3列）。2行1列目にのみ配置される
+   *   seatLeaders,   … 座席側に回す役席・GL（役席→GL・時刻順。先頭が座席10行き）
+   *   seat10Name,    … 座席10へ強制配置するリーダーの氏名（いなければnull）
+   *   logs,
+   * }
+   */
+  function assignNightLeaders(nightLeaderRows, nightGLDesignatedNames) {
+    const logs = [];
+    const glState = emptyLeaderState();
+    const flagSet = nightGLDesignatedNames || new Set();
+
+    const withIndex = nightLeaderRows.map((r, idx) => ({ ...r, shiftIndex: idx }));
+    const yakuseki = withIndex.filter(p => p.role === '役席').sort(byStartTimeThenLaterRowFirst);
+    const gl = withIndex.filter(p => p.role === 'GL').sort(byStartTimeThenLaterRowFirst);
+    const ordered = [...yakuseki, ...gl];
+
+    if (ordered.length === 0) {
+      return { glState, seatLeaders: [], seat10Name: null, logs };
+    }
+
+    // 夜勤GL枠(2行1列目)に入れる1名を決める
+    let glPerson;
+    if (ordered.length === 1) {
+      glPerson = ordered[0];
+    } else {
+      const flagged = ordered.filter(p => flagSet.has(p.name));
+      const pool = flagged.length > 0 ? flagged : ordered;
+      glPerson = pool[Math.floor(Math.random() * pool.length)];
+      if (pool.length > 1) {
+        const poolLabel = flagged.length > 0 ? '席固定（夜勤GL席）のある' : '';
+        logs.push({ level: 'info', message: `夜勤GL枠（2行1列目）には、${poolLabel}${pool.length}名の中からランダムで${glPerson.name}さんを配置しました。` });
+      } else {
+        logs.push({ level: 'info', message: `夜勤GL枠（2行1列目）に、席固定（夜勤GL席）のある${glPerson.name}さんを配置しました。` });
+      }
+    }
+    glState['2-1'] = glPerson;
+
+    const seatLeaders = ordered.filter(p => p !== glPerson);
+    const seat10Name = seatLeaders.length > 0 ? seatLeaders[0].name : null;
+    if (seat10Name) {
+      logs.push({ level: 'info', message: `夜勤の役席・GLが2名以上のため、${seat10Name}さんを座席10へ配置します。` });
+    }
+    return { glState, seatLeaders, seat10Name, logs };
   }
 
   return {
     SEATS, seatExists, ADJACENCY, assignSeats,
     buildSecretIndexes, buildAdjacentGroups, canPlace, overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat,
-    assignLeaderAreas,
+    assignLeaderAreas, assignNightLeaders,
   };
 })();

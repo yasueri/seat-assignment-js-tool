@@ -194,6 +194,10 @@ window.SeatTool.csv = (function () {
   // ---------- secret.csv ----------
   // seatByNumber は algorithm.js が提供する（座席番号 -> {row,col} の変換・妥当性チェックに使用）
   // 「禁止席」「席固定」の対象座席は、半角または全角スペース区切りで複数指定できる。
+  // 「席固定」の対象座席には、座席番号（1〜15）に加えて特別な値「夜勤GL席」も指定できる
+  // （夜勤の役席・GLが複数名いる日に、夜勤GL枠2行1列目へ優先的に入れたい人を指定するため）。
+  // 「夜勤GL席」は席固定でのみ有効（禁止席には指定できない）。座席番号と混在も可能
+  // （例: 「夜勤GL席 3」＝夜勤GL枠か3番のどちらか）。
   // 同じ人が複数行に分かれて書かれている場合は duplicateDesignatedNames /
   // duplicateForbiddenNames として検出し、呼び出し側で配置を止める判断に使う。
   function parseSecretRows(text, seatByNumber) {
@@ -235,6 +239,14 @@ window.SeatTool.csv = (function () {
         const tokens = seatCell.split(/[ \u3000]+/).filter(Boolean);
         const seenNumsInRow = new Set();
         tokens.forEach(tok => {
+          if (tok === '夜勤GL席') {
+            if (kind !== 'seat_designated') {
+              logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「夜勤GL席」は席固定でのみ指定できます（禁止席には指定できません）` });
+              return;
+            }
+            result.push({ type: 'night_gl_designated', name });
+            return;
+          }
           if (!/^\d+$/.test(tok)) {
             logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「${tok}」は座席番号として認識できません` });
             return;

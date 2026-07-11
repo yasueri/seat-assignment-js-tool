@@ -8,10 +8,10 @@
 
   const {
     parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
-    parseRookieRows, parseSecretRows, timeToMinutes,
+    parseRookieRows, parseSecretRows, timeToMinutes, isNightShift,
   } = NS.csv;
   const {
-    SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas,
+    SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
     buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat,
   } = NS.algorithm;
@@ -40,7 +40,11 @@
   const rawText = { shift: null, rookie: null, secret: null };
   const appState = {
     seats: initEmptyState(), early: initLeaderState(), late: initLeaderState(),
-    overflow: [], ruleIndexes: null, adjacentGroupLetters: null, currentDateLabel: null,
+    overflow: [],
+    // nightGL=夜勤GL枠（右側）、nightSpare=見出しなしの予備枠（左側・手書き/一時置き用）
+    nightSeats: initEmptyState(), nightGL: initLeaderState(), nightSpare: initLeaderState(),
+    nightOverflow: [],
+    ruleIndexes: null, adjacentGroupLetters: null, currentDateLabel: null,
   };
   let dragSource = null;
   let hasRunOnce = false;
@@ -57,10 +61,16 @@
     yearMonthLabel: document.getElementById('year-month-label'),
     earlyGrid: document.getElementById('early-grid'),
     lateGrid: document.getElementById('late-grid'),
+    nightSeatGrid: document.getElementById('night-seat-grid'),
+    nightGlGrid: document.getElementById('night-gl-grid'),
+    nightSpareGrid: document.getElementById('night-spare-grid'),
+    nightOverflowList: document.getElementById('night-overflow-list'),
+    nightOverflowAppend: document.getElementById('night-overflow-append'),
   };
   // overflow-append は再描画のたびに作り直される要素ではないため、
   // ドロップ受付は最初に1回だけ登録する（毎回登録するとリスナーが積み重なってしまう）
   makeDropTarget(els.overflowAppend, { type: 'overflow-append' });
+  makeDropTarget(els.nightOverflowAppend, { type: 'night-overflow-append' });
 
   function initEmptyState() {
     const seats = {};
@@ -68,7 +78,7 @@
     return seats;
   }
 
-  // 早番・遅番エリア用（3行×3列、1枠1名）
+  // 早番・遅番エリア・夜勤GL枠用（2行×3列、1枠1名）
   function initLeaderState() {
     const s = {};
     LEADER_ROWS.forEach(r => LEADER_COLS.forEach(c => { s[`${r}-${c}`] = null; }));
@@ -224,26 +234,36 @@
     panel.classList.add('flash-highlight');
   }
 
-  // 抽出した1日分の行を、座席グリッド用（OPかつ夜勤でない）と
-  // 早番・遅番エリア用（役席・GL、夜勤かどうかは問わない）に振り分ける。
-  // 役割=OPかつ夜勤のスタッフは、今回のバージョンでは配置対象外（ver3.0で対応予定）。
+  // 抽出した1日分の行を、以下の4つに振り分ける。
+  //   opRows          … 日勤座席グリッド用（OPかつ夜勤でない）
+  //   leaderRows      … 早番・遅番エリア用（役席・GLかつ夜勤でない）
+  //   nightOpRows     … 夜勤座席グリッド用（OPかつ夜勤）
+  //   nightLeaderRows … 夜勤の役席・GL（配置先はassignNightLeadersが決める:
+  //                     1名は夜勤GL枠2行1列目、2人目は座席10、3人目以降は空席へ）
+  // 夜勤＝開始時刻が22:00より遅い、または終了時刻が26:00より遅いスタッフ（csv.jsで判定済み）。
   function splitDayRows(dayRows) {
     const opRows = [];
     const leaderRows = [];
+    const nightOpRows = [];
+    const nightLeaderRows = [];
     dayRows.forEach(r => {
-      if (r.role === 'OP') {
-        if (!r.nightShift) {
-          opRows.push({ name: r.name, start: r.start, end: r.end, startMin: r.startMin, endMin: r.endMin, frontOT: r.frontOT, backOT: r.backOT });
+      const base = {
+        name: r.name, start: r.start, end: r.end, startMin: r.startMin, endMin: r.endMin,
+        frontOT: r.frontOT, backOT: r.backOT,
+      };
+      if (r.nightShift) {
+        if (r.role === 'OP') {
+          nightOpRows.push(base);
+        } else {
+          nightLeaderRows.push({ ...base, role: r.role });
         }
-        // 夜勤OPは今回は対象外（ver3.0で対応予定）
+      } else if (r.role === 'OP') {
+        opRows.push(base);
       } else {
-        leaderRows.push({
-          name: r.name, start: r.start, end: r.end, startMin: r.startMin, endMin: r.endMin,
-          frontOT: r.frontOT, backOT: r.backOT, role: r.role, isLate: r.lateShift,
-        });
+        leaderRows.push({ ...base, role: r.role, isLate: r.lateShift });
       }
     });
-    return { opRows, leaderRows };
+    return { opRows, leaderRows, nightOpRows, nightLeaderRows };
   }
 
   // ---------- 自動配置の実行 ----------
@@ -265,7 +285,7 @@
     const rookieParsed = parseRookieRows(rawText.rookie);
     const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
     const dayRows = rowsForDate(shiftMonthly.rows, selectedDate);
-    const { opRows, leaderRows } = splitDayRows(dayRows);
+    const { opRows, leaderRows, nightOpRows, nightLeaderRows } = splitDayRows(dayRows);
 
     const allLogs = [...shiftMonthly.logs, ...rookieParsed.logs, ...secretParsed.logs];
 
@@ -288,14 +308,46 @@
       if (!ok) return;
     }
 
+    // --- 日勤 ---
     const seatResult = assignSeats(opRows, rookieParsed.rows, secretParsed.rows);
     const leaderResult = assignLeaderAreas(leaderRows);
-    allLogs.push(...seatResult.logs, ...leaderResult.logs);
+
+    // --- 夜勤 ---
+    // 1) 役席・GLの行き先を決める（1名はGL枠2行1列目。2人目は座席10、3人目以降は空席へ。
+    //    GL枠の優先候補は secret.csv の 席固定「夜勤GL席」から取得する）
+    const secretIndexes = buildSecretIndexes(secretParsed.rows);
+    const nightLeaderResult = assignNightLeaders(nightLeaderRows, secretIndexes.nightGLDesignatedNames);
+    // 2) 座席側に回るリーダー（2人目以降）をOPと合流させる。2人目には座席10の
+    //    席固定ルールをこの配置限定で追加する（secret.csv自体は変更しない）。
+    //    silent:true を付けることで、座席への強制配置は行いつつ「席固定」
+    //    バッジは表示しない（secret.csvに入力された指定ではないため）
+    const nightSeatRows = [...nightOpRows, ...nightLeaderResult.seatLeaders];
+    let nightSecretRows = secretParsed.rows;
+    if (nightLeaderResult.seat10Name) {
+      const seat10 = seatByNumber(10);
+      nightSecretRows = [...secretParsed.rows,
+        { type: 'seat_designated', name: nightLeaderResult.seat10Name, row: seat10.row, col: seat10.col, silent: true }];
+    }
+    // 3) 席固定（座席10のリーダー含む）＞ 新人固定席 ＞ 時刻順 で配置。
+    //    nightContext:true により、同列隣接をソフトに回避する（席固定で結果的に
+    //    隣接するのは許容）。座席側に回った「夜勤GL席」指定者にはバッジが付く
+    const nightResult = assignSeats(nightSeatRows, rookieParsed.rows, nightSecretRows, { nightContext: true });
+
+    // どちらの配置に関するメッセージか分かるように接頭辞を付ける
+    const prefixLogs = (logs, prefix) => logs.map(l => ({ ...l, message: `${prefix}${l.message}` }));
+    allLogs.push(
+      ...prefixLogs([...seatResult.logs, ...leaderResult.logs], '【日勤】'),
+      ...prefixLogs([...nightLeaderResult.logs, ...nightResult.logs], '【夜勤】'),
+    );
 
     appState.seats = seatResult.state;
     appState.early = leaderResult.early;
     appState.late = leaderResult.late;
     appState.overflow = seatResult.overflow;
+    appState.nightSeats = nightResult.state;
+    appState.nightGL = nightLeaderResult.glState;
+    appState.nightSpare = initLeaderState(); // 予備枠（左側）は自動配置では使わない
+    appState.nightOverflow = nightResult.overflow;
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
     appState.currentDateLabel = formatDateLabel(selectedDate);
@@ -315,9 +367,9 @@
   // 位置（座席のスロット・早番/遅番エリアの枠・あふれの何番目か）が同じかどうか
   function locEquals(a, b) {
     if (!a || !b || a.type !== b.type) return false;
-    if (a.type === 'seat') return a.seatKey === b.seatKey && a.slotIndex === b.slotIndex;
-    if (a.type === 'early' || a.type === 'late') return a.key === b.key;
-    if (a.type === 'overflow') return a.index === b.index;
+    if (a.type === 'seat' || a.type === 'nightSeat') return a.seatKey === b.seatKey && a.slotIndex === b.slotIndex;
+    if (a.type === 'early' || a.type === 'late' || a.type === 'nightGL' || a.type === 'nightSpare') return a.key === b.key;
+    if (a.type === 'overflow' || a.type === 'nightOverflow') return a.index === b.index;
     return false;
   }
 
@@ -340,26 +392,34 @@
     };
   }
 
-  // 指定した位置以外に、同じ氏名の人がすでにいないか確認する（手入力での重複防止）
+  // 指定した位置以外に、同じ氏名の人がすでにいないか確認する（手入力での重複防止）。
+  // 二重配置の廃止（ver4.0）に伴い、夜勤GL枠・予備枠も含めた全エリアでチェックする。
   function isNameUsedElsewhere(name, loc) {
-    for (const s of SEATS) {
-      for (let i = 0; i < 2; i++) {
-        if (loc.type === 'seat' && loc.seatKey === s.key && loc.slotIndex === i) continue;
-        const p = appState.seats[s.key][i];
-        if (p && p.name === name) return true;
+    for (const [seatType, seatState] of [['seat', appState.seats], ['nightSeat', appState.nightSeats]]) {
+      for (const s of SEATS) {
+        for (let i = 0; i < 2; i++) {
+          if (loc.type === seatType && loc.seatKey === s.key && loc.slotIndex === i) continue;
+          const p = seatState[s.key][i];
+          if (p && p.name === name) return true;
+        }
       }
     }
-    for (const [areaType, areaState] of [['early', appState.early], ['late', appState.late]]) {
+    for (const [areaType, areaState] of [
+      ['early', appState.early], ['late', appState.late],
+      ['nightGL', appState.nightGL], ['nightSpare', appState.nightSpare],
+    ]) {
       for (const key of Object.keys(areaState)) {
         if (loc.type === areaType && loc.key === key) continue;
         const p = areaState[key];
         if (p && p.name === name) return true;
       }
     }
-    for (let i = 0; i < appState.overflow.length; i++) {
-      if (loc.type === 'overflow' && loc.index === i) continue;
-      const p = appState.overflow[i];
-      if (p && p.name === name) return true;
+    for (const [ovType, ovList] of [['overflow', appState.overflow], ['nightOverflow', appState.nightOverflow]]) {
+      for (let i = 0; i < ovList.length; i++) {
+        if (loc.type === ovType && loc.index === i) continue;
+        const p = ovList[i];
+        if (p && p.name === name) return true;
+      }
     }
     return false;
   }
@@ -368,6 +428,7 @@
   function deletePersonAt(loc) {
     setPersonAt(loc, null);
     appState.overflow = appState.overflow.filter(Boolean);
+    appState.nightOverflow = appState.nightOverflow.filter(Boolean);
   }
 
   // 1〜2行のバッジを1つ作る（line2が空なら1行のみ）
@@ -470,6 +531,9 @@
     if (person.hasAdjacentRule) {
       badges.appendChild(makeBadge('lock', '隣禁止', person.adjacentGroupLetter || ''));
     }
+    if (person.hasNightGLDesignation) {
+      badges.appendChild(makeBadge('designated', '夜勤', 'GL席'));
+    }
     card.appendChild(badges);
 
     card.addEventListener('dragstart', (e) => {
@@ -479,7 +543,8 @@
     return card;
   }
 
-  // 早番・遅番エリア用のカード（役席・GL）。1行目=氏名、2行目=時間、3行目は空欄。
+  // 早番・遅番エリア・夜勤GL枠・予備枠用のカード（役席・GL）。
+  // 1行目=氏名、2行目=時間、3行目は空欄。
   // 役席・GLは席が決まっているわけではなく動き回るため、バッジや枠番号は付けない。
   function createLeaderCard(loc, person) {
     const card = document.createElement('div');
@@ -627,19 +692,28 @@
 
   function getPersonAt(loc) {
     if (loc.type === 'seat') return appState.seats[loc.seatKey][loc.slotIndex];
+    if (loc.type === 'nightSeat') return appState.nightSeats[loc.seatKey][loc.slotIndex];
     if (loc.type === 'early') return appState.early[loc.key];
     if (loc.type === 'late') return appState.late[loc.key];
+    if (loc.type === 'nightGL') return appState.nightGL[loc.key];
+    if (loc.type === 'nightSpare') return appState.nightSpare[loc.key];
     if (loc.type === 'overflow') return appState.overflow[loc.index];
+    if (loc.type === 'nightOverflow') return appState.nightOverflow[loc.index];
     return null;
   }
   function setPersonAt(loc, person) {
     if (loc.type === 'seat') appState.seats[loc.seatKey][loc.slotIndex] = person;
+    else if (loc.type === 'nightSeat') appState.nightSeats[loc.seatKey][loc.slotIndex] = person;
     else if (loc.type === 'early') appState.early[loc.key] = person;
     else if (loc.type === 'late') appState.late[loc.key] = person;
+    else if (loc.type === 'nightGL') appState.nightGL[loc.key] = person;
+    else if (loc.type === 'nightSpare') appState.nightSpare[loc.key] = person;
     else if (loc.type === 'overflow') appState.overflow[loc.index] = person;
+    else if (loc.type === 'nightOverflow') appState.nightOverflow[loc.index] = person;
   }
 
-  // ドラッグ元とドロップ先の中身を入れ替える（人単位の移動・交換）
+  // ドラッグ元とドロップ先の中身を入れ替える（人単位の移動・交換）。
+  // ver4.0で二重配置を廃止したため、夜勤GL枠・予備枠も含め全エリア間で自由に移動できる。
   function handleDrop(target) {
     if (!dragSource) return;
     editingLoc = null; // ドラッグ操作が起きたら、開いていた編集フォームは閉じる
@@ -648,6 +722,11 @@
       if (!person) return;
       setPersonAt(dragSource, null);
       appState.overflow.push(person);
+    } else if (target.type === 'night-overflow-append') {
+      const person = getPersonAt(dragSource);
+      if (!person) return;
+      setPersonAt(dragSource, null);
+      appState.nightOverflow.push(person);
     } else {
       const personA = getPersonAt(dragSource);
       const personB = getPersonAt(target);
@@ -655,6 +734,7 @@
       setPersonAt(target, personA);
     }
     appState.overflow = appState.overflow.filter(Boolean); // 入れ替えで生じた穴を詰める
+    appState.nightOverflow = appState.nightOverflow.filter(Boolean);
     dragSource = null;
     render();
   }
@@ -680,8 +760,9 @@
     return slot;
   }
 
-  function renderSeatGrid() {
-    const grid = els.seatGrid;
+  // 座席グリッド（全15席）を描画する。日勤（locType='seat'）と夜勤（locType='nightSeat'）で共用。
+  function renderSeatGrid(gridEl, locType) {
+    const grid = gridEl;
     grid.innerHTML = '';
     for (let row = 1; row <= 4; row++) {
       for (let col = 1; col <= 4; col++) {
@@ -700,15 +781,15 @@
         coord.textContent = numberOfSeat(row, col);
         seatDiv.appendChild(coord);
 
-        seatDiv.appendChild(createSlot({ type: 'seat', seatKey: key, slotIndex: 0 }));
-        seatDiv.appendChild(createSlot({ type: 'seat', seatKey: key, slotIndex: 1 }));
+        seatDiv.appendChild(createSlot({ type: locType, seatKey: key, slotIndex: 0 }));
+        seatDiv.appendChild(createSlot({ type: locType, seatKey: key, slotIndex: 1 }));
 
         grid.appendChild(seatDiv);
       }
     }
   }
 
-  // 早番・遅番エリア（3行×3列、1枠1名）を描画する
+  // 早番・遅番エリア・夜勤GL枠・予備枠（2行×3列、1枠1名）を描画する
   function renderLeaderGrid(containerEl, areaType) {
     if (!containerEl) return;
     containerEl.innerHTML = '';
@@ -737,17 +818,18 @@
     });
   }
 
-  function renderOverflow() {
-    const list = els.overflowList;
+  // あふれ欄を描画する。日勤（'overflow'）と夜勤（'nightOverflow'）で共用。
+  function renderOverflow(listEl, arr, locType) {
+    const list = listEl;
     list.innerHTML = '';
-    if (appState.overflow.length === 0) {
+    if (arr.length === 0) {
       const note = document.createElement('div');
       note.className = 'overflow-empty-note';
       note.textContent = 'あふれはありません。';
       list.appendChild(note);
     } else {
-      appState.overflow.forEach((person, i) => {
-        const loc = { type: 'overflow', index: i };
+      arr.forEach((person, i) => {
+        const loc = { type: locType, index: i };
         const wrapper = document.createElement('div');
         wrapper.className = 'overflow-slot';
         wrapper.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person));
@@ -760,8 +842,12 @@
   function render() {
     renderLeaderGrid(els.earlyGrid, 'early');
     renderLeaderGrid(els.lateGrid, 'late');
-    renderSeatGrid();
-    renderOverflow();
+    renderSeatGrid(els.seatGrid, 'seat');
+    renderOverflow(els.overflowList, appState.overflow, 'overflow');
+    renderLeaderGrid(els.nightSpareGrid, 'nightSpare');
+    renderLeaderGrid(els.nightGlGrid, 'nightGL');
+    renderSeatGrid(els.nightSeatGrid, 'nightSeat');
+    renderOverflow(els.nightOverflowList, appState.nightOverflow, 'nightOverflow');
   }
   render();
 
@@ -771,6 +857,9 @@
   });
 
   // ---------- 手動調整後のルールチェック ----------
+  // 日勤・夜勤の両方の座席グリッドで secret.csv のルールと相席の時間重複をチェックし、
+  // さらに全エリア（座席・早番/遅番・夜勤GL枠・予備枠・あふれ）を対象に
+  // 日勤・夜勤の入れ違い（夜勤の人が日勤側にいる等）を検出する。
   function checkPlacementViolations() {
     if (!appState.ruleIndexes) {
       alert('先に「自動配置を実行」してください。');
@@ -778,53 +867,104 @@
     }
     const { forbiddenPairSet, forbiddenSeatSet, designatedSeatsMap } = appState.ruleIndexes;
     const violations = [];
-    const reportedAdjacentPairs = new Set();
 
-    for (const s of SEATS) {
-      const occHere = appState.seats[s.key].filter(Boolean);
+    const grids = [
+      { label: '【日勤】', seats: appState.seats },
+      { label: '【夜勤】', seats: appState.nightSeats },
+    ];
 
-      // ルール2: 禁止席
-      occHere.forEach(p => {
-        if (forbiddenSeatSet.has(`${p.name}|${s.key}`)) {
-          violations.push(`${p.name}さんが禁止されている${numberOfKey(s.key)}番の座席に配置されています`);
-        }
-      });
+    for (const { label, seats } of grids) {
+      const reportedAdjacentPairs = new Set();
+      for (const s of SEATS) {
+        const occHere = seats[s.key].filter(Boolean);
 
-      // 同席2名までのうち、勤務時間が重なっていないか
-      if (occHere.length === 2 && overlaps(occHere[0], occHere[1])) {
-        violations.push(`${numberOfKey(s.key)}番の座席で、勤務時間が重なる${occHere[0].name}さんと${occHere[1].name}さんが同席しています`);
-      }
-
-      // ルール1: 隣接禁止（同じペアを2回報告しないようにする）
-      for (const adjKey of ADJACENCY[s.key]) {
-        const occAdj = appState.seats[adjKey].filter(Boolean);
-        occHere.forEach(a => occAdj.forEach(b => {
-          if (isForbiddenPair(a.name, b.name, forbiddenPairSet)) {
-            const pairId = [a.name, b.name].sort().join('|') + '@' + [s.key, adjKey].sort().join(',');
-            if (!reportedAdjacentPairs.has(pairId)) {
-              reportedAdjacentPairs.add(pairId);
-              violations.push(`${a.name}さんと${b.name}さんが隣接する座席に配置されています`);
-            }
+        // ルール2: 禁止席
+        occHere.forEach(p => {
+          if (forbiddenSeatSet.has(`${p.name}|${s.key}`)) {
+            violations.push(`${label}${p.name}さんが禁止されている${numberOfKey(s.key)}番の座席に配置されています`);
           }
-        }));
+        });
+
+        // 同席2名までのうち、勤務時間が重なっていないか
+        if (occHere.length === 2 && overlaps(occHere[0], occHere[1])) {
+          violations.push(`${label}${numberOfKey(s.key)}番の座席で、勤務時間が重なる${occHere[0].name}さんと${occHere[1].name}さんが同席しています`);
+        }
+
+        // ルール1: 隣接禁止（同じペアを2回報告しないようにする）
+        for (const adjKey of ADJACENCY[s.key]) {
+          const occAdj = seats[adjKey].filter(Boolean);
+          occHere.forEach(a => occAdj.forEach(b => {
+            if (isForbiddenPair(a.name, b.name, forbiddenPairSet)) {
+              const pairId = [a.name, b.name].sort().join('|') + '@' + [s.key, adjKey].sort().join(',');
+              if (!reportedAdjacentPairs.has(pairId)) {
+                reportedAdjacentPairs.add(pairId);
+                violations.push(`${label}${a.name}さんと${b.name}さんが隣接する座席に配置されています`);
+              }
+            }
+          }));
+        }
       }
     }
 
-    // ルール3: 席固定が守られているか（その日出勤している対象者のみチェック）
+    // ルール3: 席固定が守られているか（その日出勤している対象者のみチェック。
+    // 日勤・夜勤どちらの座席グリッドでも、指定された座席番号に座っていればよい）
     for (const [name, seatKeys] of designatedSeatsMap.entries()) {
-      const seatedAt = SEATS.find(s => appState.seats[s.key].filter(Boolean).some(p => p.name === name));
-      const isInOverflow = appState.overflow.some(p => p.name === name);
-      if (!seatedAt && !isInOverflow) continue; // その日出勤していない
+      const seatedAtList = [];
+      for (const { label, seats } of grids) {
+        const seatedAt = SEATS.find(s => seats[s.key].filter(Boolean).some(p => p.name === name));
+        if (seatedAt) seatedAtList.push({ label, key: seatedAt.key });
+      }
+      const isInOverflow = appState.overflow.some(p => p && p.name === name)
+        || appState.nightOverflow.some(p => p && p.name === name);
+      if (seatedAtList.length === 0 && !isInOverflow) continue; // その日出勤していない
 
-      if (!seatedAt || !seatKeys.includes(seatedAt.key)) {
+      const badPlacement = seatedAtList.length === 0 || seatedAtList.some(o => !seatKeys.includes(o.key));
+      if (badPlacement) {
         const seatList = seatKeys.map(k => `${numberOfKey(k)}番`).join(' または ');
         violations.push(`${name}さんが指定された座席（${seatList}）に配置されていません`);
       }
     }
 
-    renderMessages(violations.length === 0
+    // ---- 日勤・夜勤の入れ違いチェック ----
+    // 勤務時間から夜勤かどうか（開始が22:00より遅い、または終了が26:00より遅い）を
+    // 判定し直し、日勤側に夜勤の人・夜勤側に日勤の人が配置されていれば知らせる。
+    // 手動でのドラッグ移動や時刻の手入力修正で入れ違いになったケースを検出する。
+    const crossShiftWarnings = [];
+    const collectPeople = (locations) => {
+      const result = [];
+      locations.forEach(({ area, state, list }) => {
+        if (state) Object.values(state).forEach(p => { if (p) result.push(p); });
+        if (list) list.forEach(p => { if (p) result.push(p); });
+        if (area) for (const s of SEATS) area[s.key].forEach(p => { if (p) result.push(p); });
+      });
+      return result;
+    };
+    const dayPeople = collectPeople([
+      { area: appState.seats }, { state: appState.early }, { state: appState.late },
+      { list: appState.overflow },
+    ]);
+    const nightPeople = collectPeople([
+      { area: appState.nightSeats }, { state: appState.nightGL }, { state: appState.nightSpare },
+      { list: appState.nightOverflow },
+    ]);
+    dayPeople.forEach(p => {
+      if (isNightShift(p.startMin, p.endMin)) {
+        crossShiftWarnings.push(`【日勤】${p.name}さん（${p.start}-${p.end}）は夜勤の勤務時間ですが、日勤側に配置されています`);
+      }
+    });
+    nightPeople.forEach(p => {
+      if (!isNightShift(p.startMin, p.endMin)) {
+        crossShiftWarnings.push(`【夜勤】${p.name}さん（${p.start}-${p.end}）は日勤の勤務時間ですが、夜勤側に配置されています`);
+      }
+    });
+
+    const resultLogs = [
+      ...violations.map(m => ({ level: 'error', message: m })),
+      ...crossShiftWarnings.map(m => ({ level: 'warn', message: m })),
+    ];
+    renderMessages(resultLogs.length === 0
       ? [{ level: 'info', message: '違反は見つかりませんでした。' }]
-      : violations.map(m => ({ level: 'error', message: m })));
+      : resultLogs);
     scrollToMessages();
   }
   document.getElementById('btn-check').addEventListener('click', checkPlacementViolations);
@@ -834,8 +974,8 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // 残業（前残業/後残業）の時刻表示。エクセルの「パターンの種類: 25%灰色」に近い
-  // ドットパターン＋「※」マークで示す（背景を印刷しない設定でも※は必ず印刷される）
+  // 残業（前残業/後残業）の時刻表示。黄色の背景＋「※」マークで示す
+  // （背景色が印刷されない設定でも※は必ず印刷される。背景色自体はCSS側で指定）
   function printTimeSpan(text, isOT) {
     if (!isOT) return `<span class="pt">${escapeHtml(text)}</span>`;
     return `<span class="pt ot">${escapeHtml(text)}<sup class="ot-mark">※</sup></span>`;
@@ -856,13 +996,14 @@
       + '</div>';
   }
 
-  // 早番・遅番エリア（3行×3列）を1つ分描画する。動き回って座席が決まっていないため、
-  // 枠番号・役割は表示しない（1行目=氏名、2行目=時間、3行目は空欄）
+  // 早番・遅番エリア・夜勤GL枠・予備枠（2行×3列）を1つ分描画する。動き回って座席が
+  // 決まっていないため、枠番号・役割は表示しない（1行目=氏名、2行目=時間、3行目は空欄）。
+  // label が空文字の場合は、見出しの高さだけ確保した無題の枠になる。
   function printLeaderColumnHtml(stateObj, label) {
     let cellsHtml = '';
     LEADER_ROWS.forEach(row => {
       LEADER_COLS.forEach(col => {
-        const p = stateObj[`${row}-${col}`];
+        const p = stateObj ? stateObj[`${row}-${col}`] : null;
         cellsHtml += '<div class="print-leader-cell">';
         if (p) {
           cellsHtml += `<div class="print-leader-name">${escapeHtml(p.name)}</div>`
@@ -872,15 +1013,12 @@
         cellsHtml += '</div>';
       });
     });
-    return `<div class="print-leader-col"><div class="print-leader-frame"><h3>${escapeHtml(label)}</h3><div class="print-leader-grid">${cellsHtml}</div></div></div>`;
+    const titleHtml = label ? escapeHtml(label) : '&nbsp;';
+    return `<div class="print-leader-col"><div class="print-leader-frame"><h3>${titleHtml}</h3><div class="print-leader-grid">${cellsHtml}</div></div></div>`;
   }
 
-  function buildPrintHtml(dateLabel, generatedLabel) {
-    const leaderHtml = '<div class="print-leader-section">'
-      + printLeaderColumnHtml(appState.early, '早番')
-      + printLeaderColumnHtml(appState.late, '遅番')
-      + '</div>';
-
+  // 座席グリッド（全15席）の印刷用HTML。日勤・夜勤で共用（渡された座席stateを描画する）。
+  function printSeatGridHtml(seatsState) {
     // 1〜2列目・3〜4列目は向かい合わせのため間隔なし、2〜3列目（通路）だけ間隔を残す。
     // そのため5列構成のグリッド（1,2,通路,3,4）にして、座席は列1,2,4,5へ配置する。
     const gridColumnOf = (col) => (col <= 2 ? col : col + 1);
@@ -888,7 +1026,7 @@
     for (let row = 1; row <= 4; row++) {
       for (let col = 1; col <= 4; col++) {
         if (!seatExists(row, col)) continue; // 存在しない席（右下）は何も描画しない
-        const slots = appState.seats[`${row}-${col}`]; // [人 or null, 人 or null]（常に2枠）
+        const slots = seatsState[`${row}-${col}`]; // [人 or null, 人 or null]（常に2枠）
         const style = `grid-column:${gridColumnOf(col)}; grid-row:${row};`;
         gridHtml += `<div class="print-seat" style="${style}">`
           + printOccupantHtml(slots[0], String(numberOfSeat(row, col)))
@@ -898,30 +1036,59 @@
       }
     }
     gridHtml += '</div>';
+    return gridHtml;
+  }
 
-    let overflowHtml = '';
-    if (appState.overflow.length > 0) {
-      overflowHtml = '<div class="print-overflow"><h2>あふれ</h2><ul>'
-        + appState.overflow.map(p => `<li>${escapeHtml(p.name)}（${escapeHtml(p.start)} - ${escapeHtml(p.end)}）</li>`).join('')
-        + '</ul></div>';
-    }
+  // あふれ一覧の印刷用HTML（0件なら空文字）
+  function printOverflowHtml(overflowArr) {
+    if (overflowArr.length === 0) return '';
+    return '<div class="print-overflow"><h2>あふれ</h2><ul>'
+      + overflowArr.map(p => `<li>${escapeHtml(p.name)}（${escapeHtml(p.start)} - ${escapeHtml(p.end)}）</li>`).join('')
+      + '</ul></div>';
     // ※ 一覧のレイアウト（1行3列）は <style> 側の .print-overflow ul で指定
+  }
 
-    // 残業（※マーク）が1件でもあれば、意味を説明する凡例を表示する
-    const hasAnyOT = SEATS.some(s => (appState.seats[s.key] || []).some(p => p && (p.frontOT || p.backOT)))
+  // 印刷用ページは2ページ構成: 1ページ目=日勤、2ページ目=夜勤（A4各1枚。両面コピー用）
+  function buildPrintHtml(dateLabel, generatedLabel) {
+    // --- 1ページ目: 日勤 ---
+    const dayLeaderHtml = '<div class="print-leader-section">'
+      + printLeaderColumnHtml(appState.early, '早番')
+      + printLeaderColumnHtml(appState.late, '遅番')
+      + '</div>';
+    const dayGridHtml = printSeatGridHtml(appState.seats);
+    const dayOverflowHtml = printOverflowHtml(appState.overflow);
+
+    // 残業（※マーク）が1件でもあれば、意味を説明する凡例を表示する（ページごとに判定）
+    const dayHasOT = SEATS.some(s => (appState.seats[s.key] || []).some(p => p && (p.frontOT || p.backOT)))
       || Object.values(appState.early).some(p => p && (p.frontOT || p.backOT))
       || Object.values(appState.late).some(p => p && (p.frontOT || p.backOT));
-    const legendHtml = hasAnyOT ? '<div class="print-legend">※…残業（前残業＝出勤時刻／後残業＝退勤時刻）</div>' : '';
+    const dayLegendHtml = dayHasOT ? '<div class="print-legend">※…残業（前残業＝出勤時刻／後残業＝退勤時刻）</div>' : '';
+
+    // --- 2ページ目: 夜勤 ---
+    // 左＝見出しなしの予備枠（通常は空。手動で置いた場合はその内容を印刷）、右＝夜勤GL枠
+    const nightLeaderHtml = '<div class="print-leader-section">'
+      + printLeaderColumnHtml(appState.nightSpare, '')
+      + printLeaderColumnHtml(appState.nightGL, '夜勤GL')
+      + '</div>';
+    const nightGridHtml = printSeatGridHtml(appState.nightSeats);
+    const nightOverflowHtml = printOverflowHtml(appState.nightOverflow);
+
+    const nightHasOT = SEATS.some(s => (appState.nightSeats[s.key] || []).some(p => p && (p.frontOT || p.backOT)))
+      || Object.values(appState.nightGL).some(p => p && (p.frontOT || p.backOT))
+      || Object.values(appState.nightSpare).some(p => p && (p.frontOT || p.backOT));
+    const nightLegendHtml = nightHasOT ? '<div class="print-legend">※…残業（前残業＝出勤時刻／後残業＝退勤時刻）</div>' : '';
 
     return `<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>${escapeHtml(dateLabel)} 日勤 座席表</title>
+<title>${escapeHtml(dateLabel)} 座席表</title>
 <style>
   @page { size: A4 portrait; margin: 4mm 14mm; }
   * { box-sizing: border-box; }
   body { font-family: "Yu Gothic UI","Meiryo","Hiragino Kaku Gothic ProN",sans-serif; color:#222; margin:0; }
+  /* 1ページ目=日勤、2ページ目=夜勤。2ページ目の前で必ず改ページする */
+  .print-page + .print-page { break-before: page; page-break-before: always; }
   .print-generated { text-align:right; font-size:11px; color:#999; margin-bottom:0.5mm; }
   .print-title { text-align:center; font-size:24px; font-weight:700; margin-bottom:4mm; }
   .print-legend { font-size:10.5px; color:#777; text-align:right; margin:-2mm 0 2.5mm; }
@@ -944,16 +1111,12 @@
   .print-name { font-size:16px; font-weight:600; }
   .print-time { font-size:16px; color:#555; margin-top:0.5mm; }
   .print-blank { flex:1; }
-  /* 残業の目印: 画面でこのページを見ているときは黄色、実際に印刷（プレビュー含む）
-     するときは薄いグレーになる（@media print で上書き） */
+  /* 残業の目印: 画面・印刷（プレビュー含む）どちらも黄色で塗りつぶす。
+     以前は印刷時のみ薄いグレーに切り替える案（Excelの「12.5%灰色」相当）を
+     試したが、環境によって印刷に反映されなかったため、黄色に統一している。 */
   .print-time .pt.ot, .print-leader-time .pt.ot {
     font-weight:700; padding:0 0.6mm; border-radius:0.3mm;
     background-color:#FFF3B0;
-  }
-  @media print {
-    .print-time .pt.ot, .print-leader-time .pt.ot {
-      background-color:#D9D9D9;
-    }
   }
   .ot-mark { font-size:8px; vertical-align:top; margin-left:0.3mm; }
   .pt-sep { margin:0 0.5mm; color:#777; }
@@ -968,13 +1131,23 @@
 </style>
 </head>
 <body>
-  <div class="no-print"><button onclick="window.print()">この内容を印刷する</button></div>
-  <div class="print-generated">出力: ${escapeHtml(generatedLabel)}</div>
-  <div class="print-title">${escapeHtml(dateLabel)} 日勤 座席表</div>
-  ${legendHtml}
-  ${leaderHtml}
-  ${gridHtml}
-  ${overflowHtml}
+  <div class="no-print"><button onclick="window.print()">この内容を印刷する（1枚目: 日勤 / 2枚目: 夜勤）</button></div>
+  <div class="print-page">
+    <div class="print-generated">出力: ${escapeHtml(generatedLabel)}</div>
+    <div class="print-title">${escapeHtml(dateLabel)} 日勤 座席表</div>
+    ${dayLegendHtml}
+    ${dayLeaderHtml}
+    ${dayGridHtml}
+    ${dayOverflowHtml}
+  </div>
+  <div class="print-page">
+    <div class="print-generated">出力: ${escapeHtml(generatedLabel)}</div>
+    <div class="print-title">${escapeHtml(dateLabel)} 夜勤 座席表</div>
+    ${nightLegendHtml}
+    ${nightLeaderHtml}
+    ${nightGridHtml}
+    ${nightOverflowHtml}
+  </div>
 </body>
 </html>`;
   }
