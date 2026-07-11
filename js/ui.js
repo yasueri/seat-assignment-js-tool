@@ -71,6 +71,7 @@
     nightSpareGrid: document.getElementById('night-spare-grid'),
     nightOverflowList: document.getElementById('night-overflow-list'),
     nightOverflowAppend: document.getElementById('night-overflow-append'),
+    saveSelect: document.getElementById('save-select'),
   };
   // overflow-append は再描画のたびに作り直される要素ではないため、
   // ドロップ受付は最初に1回だけ登録する（毎回登録するとリスナーが積み重なってしまう）
@@ -113,10 +114,33 @@
       rawText[key] = await file.text();
       markFileLoaded(key, file.name);
       if (key === 'shift') refreshShiftMonthly();
+      // secret.csvを（再)読み込みしたとき、既に配置が存在する場合は
+      // 違反チェック用のルール（ruleIndexes）と、配置済みカードのバッジ表示を
+      // その場で再構築する。これにより、保存した配置を読み込んだ後に
+      // secret.csvを読み込む、という順序でも違反チェックとバッジが有効になる。
+      if (key === 'secret' && hasRunOnce) refreshRuleIndexesFromSecret();
     } catch (e) {
       markFileFailed(key);
       if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
     }
+  }
+
+  // 現在読み込まれているsecret.csv（rawText.secret）から、違反チェック用の
+  // ruleIndexes / adjacentGroupLetters を作り直し、配置済みカードのバッジ表示も
+  // 再計算して画面を更新する。secret.csvが未読み込みの場合は何もしない
+  // （呼び出し側でrawText.secretの有無を見て呼ぶこと）。
+  function refreshRuleIndexesFromSecret() {
+    const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
+    appState.secretRows = secretParsed.rows;
+    appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
+    appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
+    reapplyBadges();
+    render();
+    renderMessages([
+      ...secretParsed.logs,
+      { level: 'info', message: 'secret.csvを読み込み、違反チェック用のルールとバッジ表示を更新しました。' },
+    ]);
+    scrollToMessages();
   }
 
   // 月間シフトCSVを読み込み直すたびに呼び、日付セレクタを更新する
@@ -869,7 +893,7 @@
   // 日勤・夜勤の入れ違い（夜勤の人が日勤側にいる等）を検出する。
   function checkPlacementViolations() {
     if (!appState.ruleIndexes) {
-      alert('先に「自動配置を実行」してください。');
+      alert('配置違反チェックを行うには secret.csv の情報が必要です。「自動配置を実行」するか、secret.csv を読み込んでください。');
       return;
     }
     const { forbiddenPairSet, forbiddenSeatSet, designatedSeatsMap } = appState.ruleIndexes;
@@ -992,23 +1016,62 @@
   }
   document.getElementById('btn-check').addEventListener('click', checkPlacementViolations);
 
-  // ---------- 配置の保存・読み込み（ver4.3） ----------
+  // ---------- 配置の保存・読み込み（ver4.3で追加 / ver4.5でsaveフォルダ方式に変更） ----------
   // 「現在の配置を保存」: いま画面に表示されている配置（手動調整・✎編集の内容を含む）
-  // をJSONファイルとしてダウンロードする。違反チェックを読み込み後も使えるようにする
-  // ため、secret.csv由来のルール情報（appState.secretRows）も一緒に保存する。
-  // 「保存した配置を読み込み」: そのJSONファイルを選ぶと、保存した時点の配置画面を
-  // 復元する（CSVの再読み込みは不要。ただし「自動配置を実行」をやり直す場合は
-  // 従来どおりCSVの読み込みと配置対象日の選択が必要）。
+  // を、index.htmlのあるフォルダ内の「save」フォルダへJSONファイルとして保存する
+  // （saveフォルダが存在しなければ自動的に作成する）。
+  // 「保存した配置の読み込み」: saveフォルダ内の保存ファイル一覧をセレクタ
+  // （「配置対象日」と同じ形式）に表示し、選んで「読み込み」を押すと
+  // 保存した時点の配置画面を復元する。
+  //
+  // ブラウザのセキュリティ上、ページが勝手にPCのフォルダへ読み書きすることは
+  // できないため、初回に「index.htmlのあるフォルダ」をフォルダ選択ダイアログで
+  // 選んでもらう（File System Access API。Chrome / Edgeが対応）。選択したフォルダは
+  // 記憶され、次回以降は原則ダイアログなしで使える（ブラウザの仕様により、
+  // 再起動後などに権限の確認だけ求められることがある）。
+  // File System Access API非対応のブラウザ（Firefoxなど）では、従来どおり
+  // ダウンロード保存＋ファイル選択ダイアログでの読み込みにフォールバックする。
+  //
+  // 保存ファイルには secret.csv から推測できる情報（席固定・禁止席・隣接禁止・
+  // 夜勤GL席の対象かどうか、対象座席番号、グループ記号などのバッジ情報）を
+  // 一切含めない。バッジは読み込み時に、その時点でブラウザに読み込まれている
+  // secret.csv から再計算して付け直す（reapplyBadges）。
   const SAVE_FILE_MARK = '座席配置ツール保存データ';
   const SAVE_FORMAT_VERSION = 1;
+  const SAVE_DIR_NAME = 'save';
+  const supportsFolderAccess = typeof window.showDirectoryPicker === 'function';
 
   function pad2(n) { return String(n).padStart(2, '0'); }
 
-  document.getElementById('btn-save').addEventListener('click', () => {
-    if (!hasRunOnce || !appState.ruleIndexes) {
-      alert('保存できる配置がありません。先に「自動配置を実行」するか、保存した配置を読み込んでください。');
-      return;
-    }
+  // ---- 保存データの組み立て ----
+  // 1人分のうち、保存してよい最小限の項目だけを書き出す（ホワイトリスト方式）。
+  // secret.csv由来のバッジ情報（isDesignated / designatedSeatNumbers /
+  // forbiddenSeatNumbers / hasAdjacentRule / hasForbiddenSeatRule /
+  // adjacentGroupLetter / hasNightGLDesignation）は、保存ファイルから席固定・
+  // 禁止席などの内容を推測できてしまうため、ここで確実に落とす。
+  function exportPerson(p) {
+    if (!p) return null;
+    return {
+      name: p.name, start: p.start, end: p.end,
+      frontOT: !!p.frontOT, backOT: !!p.backOT,
+      role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
+      isRookie: !!p.isRookie,
+      rookieRank: Number.isFinite(p.rookieRank) ? p.rookieRank : null,
+    };
+  }
+  function exportSeatState(state) {
+    const out = {};
+    for (const s of SEATS) out[s.key] = [exportPerson(state[s.key][0]), exportPerson(state[s.key][1])];
+    return out;
+  }
+  function exportLeaderState(state) {
+    const out = {};
+    LEADER_ROWS.forEach(r => LEADER_COLS.forEach(c => { const k = `${r}-${c}`; out[k] = exportPerson(state[k]); }));
+    return out;
+  }
+  function exportOverflow(list) { return list.filter(Boolean).map(exportPerson); }
+
+  function buildSaveData() {
     const now = new Date();
     const stamp = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}`;
     const data = {
@@ -1017,17 +1080,122 @@
       savedAt: `${now.getFullYear()}/${pad2(now.getMonth() + 1)}/${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`,
       currentDate: appState.currentDate,
       currentDateLabel: appState.currentDateLabel,
-      secretRows: appState.secretRows || [],
-      seats: appState.seats,
-      early: appState.early,
-      late: appState.late,
-      overflow: appState.overflow,
-      nightSeats: appState.nightSeats,
-      nightGL: appState.nightGL,
-      nightSpare: appState.nightSpare,
-      nightOverflow: appState.nightOverflow,
+      seats: exportSeatState(appState.seats),
+      early: exportLeaderState(appState.early),
+      late: exportLeaderState(appState.late),
+      overflow: exportOverflow(appState.overflow),
+      nightSeats: exportSeatState(appState.nightSeats),
+      nightGL: exportLeaderState(appState.nightGL),
+      nightSpare: exportLeaderState(appState.nightSpare),
+      nightOverflow: exportOverflow(appState.nightOverflow),
     };
     const filename = `座席配置_${appState.currentDate || '保存'}_${stamp}.json`;
+    return { data, filename };
+  }
+
+  // ---- index.htmlフォルダ（保存先の親フォルダ）の取得と記憶 ----
+  let rootDirHandle = null;            // このセッションで選択済みのフォルダ
+  const saveFileHandles = new Map();   // セレクタに並べたファイル名 -> ファイルハンドル
+
+  // フォルダの選択内容（ハンドル）を次回以降も使えるよう、IndexedDBに記憶する。
+  // IndexedDBが使えない環境でも動作に支障はない（毎回フォルダを選び直すだけになる）。
+  const HANDLE_DB_NAME = 'seat-tool-folder';
+  const HANDLE_STORE_NAME = 'handles';
+  function idbOpen() {
+    return new Promise((resolve, reject) => {
+      if (typeof window.indexedDB === 'undefined') { reject(new Error('IndexedDB非対応')); return; }
+      const req = window.indexedDB.open(HANDLE_DB_NAME, 1);
+      req.onupgradeneeded = () => { req.result.createObjectStore(HANDLE_STORE_NAME); };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbGet(key) {
+    const db = await idbOpen();
+    try {
+      return await new Promise((resolve, reject) => {
+        const req = db.transaction(HANDLE_STORE_NAME, 'readonly').objectStore(HANDLE_STORE_NAME).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    } finally { db.close(); }
+  }
+  async function idbSet(key, value) {
+    const db = await idbOpen();
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(HANDLE_STORE_NAME, 'readwrite');
+        tx.objectStore(HANDLE_STORE_NAME).put(value, key);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    } finally { db.close(); }
+  }
+
+  async function verifyPermission(handle, withPrompt) {
+    const opts = { mode: 'readwrite' };
+    try {
+      if ((await handle.queryPermission(opts)) === 'granted') return true;
+      if (withPrompt && (await handle.requestPermission(opts)) === 'granted') return true;
+    } catch (e) { /* 権限確認に失敗した場合は「使えない」扱いにする */ }
+    return false;
+  }
+
+  // index.htmlのあるフォルダのハンドルを返す。
+  // interactive=true（ボタンクリック時）なら、必要に応じて権限確認ダイアログや
+  // フォルダ選択ダイアログを表示する。falseなら記憶済み・許可済みの場合のみ返す。
+  async function getRootDirHandle(interactive) {
+    if (rootDirHandle && await verifyPermission(rootDirHandle, interactive)) return rootDirHandle;
+    try {
+      const stored = await idbGet('rootDir');
+      if (stored && await verifyPermission(stored, interactive)) {
+        rootDirHandle = stored;
+        return stored;
+      }
+    } catch (e) { /* IndexedDBが使えない環境では毎回選択にフォールバック */ }
+    if (!interactive) return null;
+
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker({ id: 'seat-tool-root', mode: 'readwrite' });
+    } catch (e) {
+      return null; // 選択キャンセル
+    }
+    // 選ばれたのがindex.htmlのあるフォルダかどうかを軽く確認する（強制はしない）
+    let hasIndexHtml = true;
+    try { await handle.getFileHandle('index.html'); } catch (e) { hasIndexHtml = false; }
+    if (!hasIndexHtml) {
+      const ok = confirm('選択したフォルダに index.html が見つかりません。このフォルダの中に save フォルダを作って読み書きしますが、よろしいですか？（キャンセルすると中止します）');
+      if (!ok) return null;
+    }
+    rootDirHandle = handle;
+    try { await idbSet('rootDir', handle); } catch (e) { /* 記憶できなくても動作には支障なし */ }
+    return handle;
+  }
+
+  // ---- 保存（saveフォルダへの書き込み） ----
+  async function saveToFolder(data, filename) {
+    const root = await getRootDirHandle(true);
+    if (!root) {
+      alert('保存先のフォルダ（index.htmlのあるフォルダ）が選択されなかったため、保存を中止しました。');
+      return false;
+    }
+    try {
+      // saveフォルダが存在しなければここで自動的に作成される（create: true）
+      const saveDir = await root.getDirectoryHandle(SAVE_DIR_NAME, { create: true });
+      const fileHandle = await saveDir.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(JSON.stringify(data, null, 2));
+      await writable.close();
+      return true;
+    } catch (e) {
+      alert(`保存に失敗しました（${e && e.message ? e.message : e}）。フォルダの権限などをご確認ください。`);
+      return false;
+    }
+  }
+
+  // File System Access API非対応ブラウザ用: 従来のダウンロード保存
+  function saveByDownload(data, filename) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1037,26 +1205,129 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    renderMessages([{ level: 'info', message: `現在の配置を保存しました（ファイル名: ${filename}）。` }]);
+  }
+
+  document.getElementById('btn-save').addEventListener('click', async () => {
+    if (!hasRunOnce) {
+      alert('保存できる配置がありません。先に「自動配置を実行」するか、保存した配置を読み込んでください。');
+      return;
+    }
+    const { data, filename } = buildSaveData();
+    if (!supportsFolderAccess) {
+      saveByDownload(data, filename);
+      renderMessages([{ level: 'info', message: `このブラウザはフォルダへの直接保存に対応していないため、ダウンロードとして保存しました（${filename}）。ダウンロード後、index.htmlのあるフォルダ内のsaveフォルダへ移動してください。` }]);
+      return;
+    }
+    const ok = await saveToFolder(data, filename);
+    if (!ok) return;
+    renderMessages([{ level: 'info', message: `saveフォルダに保存しました（${filename}）。` }]);
+    // 読み込み用の一覧も更新し、保存したばかりのファイルを選択しておく
+    await refreshSaveFileSelect(false, filename);
     // 保存はその場で完了する操作のため、メッセージ欄へのスクロールは行わない
   });
 
-  // ---- 読み込み時の復元ヘルパー ----
-  // 保存データ内の「1人分」を検証して復元する。壊れているエントリは null（空席扱い）
-  // にして読み飛ばし、氏名が分かるものは brokenNames に集めて警告に使う。
+  // ---- 保存ファイル一覧（読み込み用セレクタ） ----
+  function setSaveSelectPlaceholder(text) {
+    const select = els.saveSelect;
+    select.innerHTML = '';
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = text;
+    select.appendChild(opt);
+    select.disabled = true;
+    saveFileHandles.clear();
+  }
+
+  // saveフォルダの中の *.json を新しい順に一覧化してセレクタに反映する。
+  // interactive=true の場合は、必要に応じてフォルダ選択ダイアログを表示する。
+  // selectName を渡すと、一覧更新後にそのファイルを選択状態にする。
+  async function refreshSaveFileSelect(interactive, selectName) {
+    if (!supportsFolderAccess) {
+      setSaveSelectPlaceholder('（このブラウザはフォルダからの一覧取得に対応していません）');
+      return;
+    }
+    const root = await getRootDirHandle(interactive);
+    if (!root) {
+      if (interactive) setSaveSelectPlaceholder('（フォルダが選択されていません。「一覧を更新」を押して選択してください）');
+      return;
+    }
+    let saveDir = null;
+    try { saveDir = await root.getDirectoryHandle(SAVE_DIR_NAME); } catch (e) { saveDir = null; }
+    if (!saveDir) {
+      setSaveSelectPlaceholder('（saveフォルダがまだありません。先に「現在の配置を保存」を実行してください）');
+      return;
+    }
+    const files = [];
+    try {
+      for await (const entry of saveDir.values()) {
+        if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.json')) continue;
+        let lastModified = 0;
+        try { lastModified = (await entry.getFile()).lastModified; } catch (e) { /* 取得できなければ0扱い */ }
+        files.push({ name: entry.name, handle: entry, lastModified });
+      }
+    } catch (e) {
+      setSaveSelectPlaceholder('（saveフォルダの一覧を取得できませんでした）');
+      return;
+    }
+    if (files.length === 0) {
+      setSaveSelectPlaceholder('（saveフォルダに保存ファイルがありません）');
+      return;
+    }
+    files.sort((a, b) => b.lastModified - a.lastModified); // 新しい順
+
+    const select = els.saveSelect;
+    select.innerHTML = '';
+    saveFileHandles.clear();
+    files.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.name;
+      opt.textContent = f.name;
+      select.appendChild(opt);
+      saveFileHandles.set(f.name, f.handle);
+    });
+    select.disabled = false;
+    if (selectName && saveFileHandles.has(selectName)) select.value = selectName;
+  }
+
+  document.getElementById('btn-refresh-saves').addEventListener('click', () => {
+    if (!supportsFolderAccess) {
+      alert('このブラウザはフォルダからの一覧取得に対応していません（Chrome / Edgeでご利用いただけます）。「読み込み」ボタンからファイルを直接選択してください。');
+      return;
+    }
+    refreshSaveFileSelect(true);
+  });
+
+  // ページを開いた時点で、記憶済み・許可済みのフォルダがあれば一覧を自動で埋める
+  // （権限が残っていない場合は何もしない。その場合は「一覧を更新」で選択し直す）
+  if (supportsFolderAccess) refreshSaveFileSelect(false);
+
+  // ---- 読み込み ----
+
+  // 読み込み時の復元ヘルパー: 保存データ内の「1人分」を検証して復元する。
+  // 保存してある項目だけを取り込むホワイトリスト方式のため、手を加えられた
+  // 保存ファイルに余計な項目が入っていてもここで確実に落とす（バッジ情報は
+  // 後段の reapplyBadges でsecret.csvから再計算する）。壊れているエントリは
+  // null（空席扱い）にして読み飛ばし、氏名が分かるものは brokenNames に集めて
+  // 警告に使う。
   function sanitizePerson(p, brokenNames) {
     if (!p || typeof p !== 'object') return null;
     const name = typeof p.name === 'string' ? p.name.trim() : '';
     if (!name) return null;
     const start = typeof p.start === 'string' ? p.start : '';
     const end = typeof p.end === 'string' ? p.end : '';
-    const startMin = Number.isFinite(p.startMin) ? p.startMin : timeToMinutes(start);
-    const endMin = Number.isFinite(p.endMin) ? p.endMin : timeToMinutes(end);
+    const startMin = timeToMinutes(start);
+    const endMin = timeToMinutes(end);
     if (startMin == null || endMin == null) {
       brokenNames.push(name);
       return null;
     }
-    return { ...p, name, start, end, startMin, endMin, frontOT: !!p.frontOT, backOT: !!p.backOT };
+    return {
+      name, start, end, startMin, endMin,
+      frontOT: !!p.frontOT, backOT: !!p.backOT,
+      role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
+      isRookie: !!p.isRookie,
+      rookieRank: Number.isFinite(p.rookieRank) ? p.rookieRank : null,
+    };
   }
 
   function restoreSeatState(saved, brokenNames) {
@@ -1087,52 +1358,52 @@
     return saved.map(p => sanitizePerson(p, brokenNames)).filter(Boolean);
   }
 
-  // 保存データ内のsecret.csv由来ルールを検証して復元する（形式が不正な行は読み飛ばす）
-  function restoreSecretRows(saved) {
-    if (!Array.isArray(saved)) return [];
-    return saved.filter(r => {
-      if (!r || typeof r !== 'object') return false;
-      if (r.type === 'adjacent_forbidden') return typeof r.name1 === 'string' && typeof r.name2 === 'string';
-      if (r.type === 'seat_forbidden' || r.type === 'seat_designated') {
-        return typeof r.name === 'string' && seatExists(r.row, r.col);
+  // 配置済みの全カードに、現在のsecret.csvルール（appState.ruleIndexes）から
+  // バッジ情報を付け直す。secret.csvが未読み込み（ruleIndexes=null）の場合は
+  // バッジなしになる。対象はバッジが表示されるエリア（日勤・夜勤の座席グリッドと
+  // あふれ）のみ。「夜勤GL席」バッジは夜勤側の座席・あふれにいる対象者にのみ付け、
+  // 夜勤GL枠に入っている本人には付けない（枠に選ばれなかった人を示すバッジのため）。
+  function reapplyBadges() {
+    const idx = appState.ruleIndexes;
+    const nightGLNames = idx ? idx.nightGLDesignatedNames : new Set();
+    const apply = (p, isNightSide) => {
+      if (!p) return p;
+      return {
+        ...p,
+        ...deriveBadgeFields(p.name),
+        hasNightGLDesignation: isNightSide && nightGLNames.has(p.name),
+      };
+    };
+    for (const s of SEATS) {
+      for (let i = 0; i < 2; i++) {
+        appState.seats[s.key][i] = apply(appState.seats[s.key][i], false);
+        appState.nightSeats[s.key][i] = apply(appState.nightSeats[s.key][i], true);
       }
-      if (r.type === 'night_gl_designated') return typeof r.name === 'string';
-      return false;
-    });
+    }
+    appState.overflow = appState.overflow.map(p => apply(p, false));
+    appState.nightOverflow = appState.nightOverflow.map(p => apply(p, true));
   }
 
-  const loadInput = document.getElementById('file-load');
-  document.getElementById('btn-load').addEventListener('click', () => {
-    if (hasRunOnce) {
-      const ok = confirm('現在表示中の配置は失われます。保存した配置を読み込みますか？');
-      if (!ok) return;
-    }
-    loadInput.click();
-  });
-
-  loadInput.addEventListener('change', async () => {
-    const file = loadInput.files[0];
-    loadInput.value = ''; // 同じファイルを選び直しても change が発火するようにする
-    if (!file) return;
-
+  // 保存ファイルのテキストを検証してオブジェクトにする。問題があればerrorを返す
+  function parseSaveJsonText(text) {
     let data;
     try {
-      data = JSON.parse(await file.text());
+      data = JSON.parse(text);
     } catch (e) {
-      alert('保存ファイルを読み込めませんでした。ファイルが壊れているか、本ツールの保存データではない可能性があります。');
-      return;
+      return { error: '保存ファイルを読み込めませんでした。ファイルが壊れているか、本ツールの保存データではない可能性があります。' };
     }
     if (!data || data.fileType !== SAVE_FILE_MARK || !Number.isFinite(data.formatVersion)) {
-      alert('このファイルは本ツールの保存データではないようです。「現在の配置を保存」で出力したJSONファイルを選択してください。');
-      return;
+      return { error: 'このファイルは本ツールの保存データではないようです。「現在の配置を保存」で出力したJSONファイルを選択してください。' };
     }
     if (data.formatVersion > SAVE_FORMAT_VERSION) {
-      alert('この保存ファイルは、より新しいバージョンのツールで作成されています。ツールを最新版に更新してから読み込んでください。');
-      return;
+      return { error: 'この保存ファイルは、より新しいバージョンのツールで作成されています。ツールを最新版に更新してから読み込んでください。' };
     }
+    return { data };
+  }
 
+  // 検証済みの保存データを画面へ反映する
+  function applySaveData(data) {
     const brokenNames = [];
-    const secretRows = restoreSecretRows(data.secretRows);
     appState.seats = restoreSeatState(data.seats, brokenNames);
     appState.early = restoreLeaderState(data.early, brokenNames);
     appState.late = restoreLeaderState(data.late, brokenNames);
@@ -1141,9 +1412,24 @@
     appState.nightGL = restoreLeaderState(data.nightGL, brokenNames);
     appState.nightSpare = restoreLeaderState(data.nightSpare, brokenNames);
     appState.nightOverflow = restoreOverflow(data.nightOverflow, brokenNames);
-    appState.secretRows = secretRows;
-    appState.ruleIndexes = buildSecretIndexes(secretRows);
-    appState.adjacentGroupLetters = buildAdjacentGroups(secretRows);
+    // secret.csv由来のルールとバッジ情報は保存ファイルには含まれていないため、
+    // その時点でブラウザに読み込まれているsecret.csv（rawText.secret）から作り直す。
+    // secret.csvが未読み込みの場合はルールなし・バッジなしにしておき、後から
+    // secret.csvを読み込んだ時点で自動的に反映される（loadFileInto内のフック）。
+    let secretNote;
+    if (rawText.secret) {
+      const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
+      appState.secretRows = secretParsed.rows;
+      appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
+      appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
+      secretNote = { level: 'info', message: '読み込み済みのsecret.csvから、違反チェック用のルールとバッジ表示を構築しました。' };
+    } else {
+      appState.secretRows = null;
+      appState.ruleIndexes = null;
+      appState.adjacentGroupLetters = null;
+      secretNote = { level: 'warn', message: 'secret.csvが読み込まれていないため、禁止席・隣接禁止・席固定の違反チェックとバッジ表示は使用できません。secret.csvを読み込むと自動的に有効になります。' };
+    }
+    reapplyBadges();
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
     appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
     hasRunOnce = true;
@@ -1152,7 +1438,7 @@
     const logs = [{
       level: 'info',
       message: `保存した配置を読み込みました（対象日: ${appState.currentDateLabel || '不明'} ／ 保存日時: ${typeof data.savedAt === 'string' ? data.savedAt : '不明'}）。`,
-    }];
+    }, secretNote];
     if (brokenNames.length > 0) {
       logs.push({
         level: 'warn',
@@ -1162,6 +1448,50 @@
     renderMessages(logs);
     render();
     scrollToMessages();
+  }
+
+  const loadInput = document.getElementById('file-load'); // 非対応ブラウザ用のフォールバック
+
+  document.getElementById('btn-load').addEventListener('click', async () => {
+    // 非対応ブラウザでは従来どおりファイル選択ダイアログで読み込む
+    if (!supportsFolderAccess) {
+      if (hasRunOnce && !confirm('現在表示中の配置は失われます。保存した配置を読み込みますか？')) return;
+      loadInput.click();
+      return;
+    }
+    const name = els.saveSelect.value;
+    if (!name || !saveFileHandles.has(name)) {
+      alert('読み込む保存ファイルを選択してください（一覧が空の場合は「一覧を更新」を押してください）。');
+      return;
+    }
+    if (hasRunOnce && !confirm('現在表示中の配置は失われます。保存した配置を読み込みますか？')) return;
+    let text;
+    try {
+      const fileHandle = saveFileHandles.get(name);
+      text = await (await fileHandle.getFile()).text();
+    } catch (e) {
+      alert('保存ファイルを開けませんでした。ファイルが移動・削除された可能性があります。「一覧を更新」で一覧を取り直してください。');
+      return;
+    }
+    const parsed = parseSaveJsonText(text);
+    if (parsed.error) { alert(parsed.error); return; }
+    applySaveData(parsed.data);
+  });
+
+  loadInput.addEventListener('change', async () => {
+    const file = loadInput.files[0];
+    loadInput.value = ''; // 同じファイルを選び直しても change が発火するようにする
+    if (!file) return;
+    let text;
+    try {
+      text = await file.text();
+    } catch (e) {
+      alert('保存ファイルを読み込めませんでした。');
+      return;
+    }
+    const parsed = parseSaveJsonText(text);
+    if (parsed.error) { alert(parsed.error); return; }
+    applySaveData(parsed.data);
   });
 
   // ---------- 印刷用ページ ----------
