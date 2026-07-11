@@ -175,7 +175,7 @@
 
   <p class="footer-note">
     各カードの✎アイコンから、氏名・時間の手入力修正や、その日の配置からの削除ができます。<br>
-    配置違反チェック・印刷のボタンは、下の「4. 夜勤 座席配置」パネルの末尾にあります（日勤・夜勤の両方が対象です）。
+    配置違反チェック・印刷・配置の保存/読み込みのボタンは、下の「4. 夜勤 座席配置」パネルの末尾にあります（日勤・夜勤の両方が対象です）。
   </p>
 </div>
 
@@ -222,11 +222,16 @@
   <div class="actions">
     <button id="btn-check" class="secondary multiline-btn"><span>手動変更後</span><span>配置違反チェック</span></button>
     <button id="btn-print" class="secondary multiline-btn"><span>印刷用ページ</span><span>を開く</span></button>
+    <button id="btn-save" class="secondary multiline-btn"><span>現在の配置を</span><span>保存</span></button>
+    <button id="btn-load" class="secondary multiline-btn"><span>保存した配置を</span><span>読み込み</span></button>
+    <input type="file" id="file-load" accept=".json,application/json" class="visually-hidden">
   </div>
 
   <p class="footer-note">
-    ドラッグ操作は配置ルールを自動チェックしません。手動で動かした後は「手動変更後 配置違反チェック」ボタンで違反がないか確認してください（日勤・夜勤の両方の座席グリッドのルール違反に加え、日勤・夜勤の入れ違い＝夜勤の人が日勤側にいる等も検出します）。<br>
+    ドラッグ操作は配置ルールを自動チェックしません。手動で動かした後は「手動変更後 配置違反チェック」ボタンで違反がないか確認してください（日勤・夜勤の両方の座席グリッドのルール違反に加え、日勤・夜勤の入れ違い＝夜勤の人が日勤側にいる等や、夜勤の役席・GLがいるのに「夜勤GL」枠が空になっているケースも検出します）。<br>
     印刷用ページは、1ページ目＝日勤、2ページ目＝夜勤のA4各1枚で出力されます（両面コピー用）。<br>
+    「現在の配置を保存」で、いま表示中の配置（手動調整の内容を含む）をJSONファイルとして保存できます。「保存した配置を読み込み」でそのファイルを選ぶと、保存した時点の配置画面が復元されます（CSVの再読み込みは不要）。<br>
+    ※保存ファイルには、配置違反チェックのために secret.csv 由来のルール情報が含まれます。secret.csv と同様に取り扱いにご注意ください。<br>
     各カードの✎アイコンから、氏名・時間の手入力修正や、その日の配置からの削除ができます。
   </p>
 </div>

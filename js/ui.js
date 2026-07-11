@@ -1,6 +1,7 @@
 // ============================================================
 // ui.js
-// 画面の描画、ドラッグ&ドロップ、ファイル入力、印刷ページ出力を担当する。
+// 画面の描画、ドラッグ&ドロップ、ファイル入力、配置の保存・読み込み、
+// 印刷ページ出力を担当する。
 // csv.js と algorithm.js が先に読み込まれている前提。
 // ============================================================
 (function (NS) {
@@ -44,7 +45,11 @@
     // nightGL=夜勤GL枠（右側）、nightSpare=見出しなしの予備枠（左側・手書き/一時置き用）
     nightSeats: initEmptyState(), nightGL: initLeaderState(), nightSpare: initLeaderState(),
     nightOverflow: [],
-    ruleIndexes: null, adjacentGroupLetters: null, currentDateLabel: null,
+    ruleIndexes: null, adjacentGroupLetters: null,
+    currentDateLabel: null, currentDate: null,
+    // secret.csvのパース結果（保存ファイルへの書き出しと、読み込み時の
+    // ruleIndexes / adjacentGroupLetters の再構築に使う）
+    secretRows: null,
   };
   let dragSource = null;
   let hasRunOnce = false;
@@ -350,7 +355,9 @@
     appState.nightOverflow = nightResult.overflow;
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
+    appState.secretRows = secretParsed.rows;
     appState.currentDateLabel = formatDateLabel(selectedDate);
+    appState.currentDate = selectedDate;
     hasRunOnce = true;
     editingLoc = null;
 
@@ -958,6 +965,22 @@
       }
     });
 
+    // ---- 夜勤GL枠が空になっていないかのチェック ----
+    // その日の配置のどこかに夜勤の役席・GL（役割と勤務時間の両方で判定）がいるのに、
+    // 夜勤GL枠に役席・GLが1人もいない場合に警告する。夜勤GL枠のカードを手動で
+    // 座席1〜15へ動かした・OPと入れ替えた・削除した、といったケースを検出するためのもの。
+    // 夜勤の役席・GLがそもそも1人もいない日は、夜勤GL枠が空でも警告しない。
+    const isLeaderRole = p => p.role === '役席' || p.role === 'GL';
+    const glFrameHasLeader = Object.values(appState.nightGL).some(p => p && isLeaderRole(p));
+    if (!glFrameHasLeader) {
+      const nightLeadersElsewhere = [...dayPeople, ...nightPeople]
+        .filter(p => isLeaderRole(p) && isNightShift(p.startMin, p.endMin));
+      if (nightLeadersElsewhere.length > 0) {
+        const names = nightLeadersElsewhere.map(p => `${p.name}さん`).join('、');
+        crossShiftWarnings.push(`【夜勤】夜勤GL枠に役席・GLが配置されていません。夜勤の役席・GL（${names}）のうち1名を夜勤GL枠へ移動してください`);
+      }
+    }
+
     const resultLogs = [
       ...violations.map(m => ({ level: 'error', message: m })),
       ...crossShiftWarnings.map(m => ({ level: 'warn', message: m })),
@@ -968,6 +991,178 @@
     scrollToMessages();
   }
   document.getElementById('btn-check').addEventListener('click', checkPlacementViolations);
+
+  // ---------- 配置の保存・読み込み（ver4.3） ----------
+  // 「現在の配置を保存」: いま画面に表示されている配置（手動調整・✎編集の内容を含む）
+  // をJSONファイルとしてダウンロードする。違反チェックを読み込み後も使えるようにする
+  // ため、secret.csv由来のルール情報（appState.secretRows）も一緒に保存する。
+  // 「保存した配置を読み込み」: そのJSONファイルを選ぶと、保存した時点の配置画面を
+  // 復元する（CSVの再読み込みは不要。ただし「自動配置を実行」をやり直す場合は
+  // 従来どおりCSVの読み込みと配置対象日の選択が必要）。
+  const SAVE_FILE_MARK = '座席配置ツール保存データ';
+  const SAVE_FORMAT_VERSION = 1;
+
+  function pad2(n) { return String(n).padStart(2, '0'); }
+
+  document.getElementById('btn-save').addEventListener('click', () => {
+    if (!hasRunOnce || !appState.ruleIndexes) {
+      alert('保存できる配置がありません。先に「自動配置を実行」するか、保存した配置を読み込んでください。');
+      return;
+    }
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}`;
+    const data = {
+      fileType: SAVE_FILE_MARK,
+      formatVersion: SAVE_FORMAT_VERSION,
+      savedAt: `${now.getFullYear()}/${pad2(now.getMonth() + 1)}/${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`,
+      currentDate: appState.currentDate,
+      currentDateLabel: appState.currentDateLabel,
+      secretRows: appState.secretRows || [],
+      seats: appState.seats,
+      early: appState.early,
+      late: appState.late,
+      overflow: appState.overflow,
+      nightSeats: appState.nightSeats,
+      nightGL: appState.nightGL,
+      nightSpare: appState.nightSpare,
+      nightOverflow: appState.nightOverflow,
+    };
+    const filename = `座席配置_${appState.currentDate || '保存'}_${stamp}.json`;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    renderMessages([{ level: 'info', message: `現在の配置を保存しました（ファイル名: ${filename}）。` }]);
+    // 保存はその場で完了する操作のため、メッセージ欄へのスクロールは行わない
+  });
+
+  // ---- 読み込み時の復元ヘルパー ----
+  // 保存データ内の「1人分」を検証して復元する。壊れているエントリは null（空席扱い）
+  // にして読み飛ばし、氏名が分かるものは brokenNames に集めて警告に使う。
+  function sanitizePerson(p, brokenNames) {
+    if (!p || typeof p !== 'object') return null;
+    const name = typeof p.name === 'string' ? p.name.trim() : '';
+    if (!name) return null;
+    const start = typeof p.start === 'string' ? p.start : '';
+    const end = typeof p.end === 'string' ? p.end : '';
+    const startMin = Number.isFinite(p.startMin) ? p.startMin : timeToMinutes(start);
+    const endMin = Number.isFinite(p.endMin) ? p.endMin : timeToMinutes(end);
+    if (startMin == null || endMin == null) {
+      brokenNames.push(name);
+      return null;
+    }
+    return { ...p, name, start, end, startMin, endMin, frontOT: !!p.frontOT, backOT: !!p.backOT };
+  }
+
+  function restoreSeatState(saved, brokenNames) {
+    const state = initEmptyState();
+    if (saved && typeof saved === 'object') {
+      for (const s of SEATS) {
+        const slots = Array.isArray(saved[s.key]) ? saved[s.key] : [];
+        state[s.key][0] = sanitizePerson(slots[0], brokenNames);
+        state[s.key][1] = sanitizePerson(slots[1], brokenNames);
+      }
+    }
+    return state;
+  }
+
+  function restoreLeaderState(saved, brokenNames) {
+    const state = initLeaderState();
+    if (saved && typeof saved === 'object') {
+      LEADER_ROWS.forEach(r => LEADER_COLS.forEach(c => {
+        const key = `${r}-${c}`;
+        state[key] = sanitizePerson(saved[key], brokenNames);
+      }));
+    }
+    return state;
+  }
+
+  function restoreOverflow(saved, brokenNames) {
+    if (!Array.isArray(saved)) return [];
+    return saved.map(p => sanitizePerson(p, brokenNames)).filter(Boolean);
+  }
+
+  // 保存データ内のsecret.csv由来ルールを検証して復元する（形式が不正な行は読み飛ばす）
+  function restoreSecretRows(saved) {
+    if (!Array.isArray(saved)) return [];
+    return saved.filter(r => {
+      if (!r || typeof r !== 'object') return false;
+      if (r.type === 'adjacent_forbidden') return typeof r.name1 === 'string' && typeof r.name2 === 'string';
+      if (r.type === 'seat_forbidden' || r.type === 'seat_designated') {
+        return typeof r.name === 'string' && seatExists(r.row, r.col);
+      }
+      if (r.type === 'night_gl_designated') return typeof r.name === 'string';
+      return false;
+    });
+  }
+
+  const loadInput = document.getElementById('file-load');
+  document.getElementById('btn-load').addEventListener('click', () => {
+    if (hasRunOnce) {
+      const ok = confirm('現在表示中の配置は失われます。保存した配置を読み込みますか？');
+      if (!ok) return;
+    }
+    loadInput.click();
+  });
+
+  loadInput.addEventListener('change', async () => {
+    const file = loadInput.files[0];
+    loadInput.value = ''; // 同じファイルを選び直しても change が発火するようにする
+    if (!file) return;
+
+    let data;
+    try {
+      data = JSON.parse(await file.text());
+    } catch (e) {
+      alert('保存ファイルを読み込めませんでした。ファイルが壊れているか、本ツールの保存データではない可能性があります。');
+      return;
+    }
+    if (!data || data.fileType !== SAVE_FILE_MARK || !Number.isFinite(data.formatVersion)) {
+      alert('このファイルは本ツールの保存データではないようです。「現在の配置を保存」で出力したJSONファイルを選択してください。');
+      return;
+    }
+    if (data.formatVersion > SAVE_FORMAT_VERSION) {
+      alert('この保存ファイルは、より新しいバージョンのツールで作成されています。ツールを最新版に更新してから読み込んでください。');
+      return;
+    }
+
+    const brokenNames = [];
+    const secretRows = restoreSecretRows(data.secretRows);
+    appState.seats = restoreSeatState(data.seats, brokenNames);
+    appState.early = restoreLeaderState(data.early, brokenNames);
+    appState.late = restoreLeaderState(data.late, brokenNames);
+    appState.overflow = restoreOverflow(data.overflow, brokenNames);
+    appState.nightSeats = restoreSeatState(data.nightSeats, brokenNames);
+    appState.nightGL = restoreLeaderState(data.nightGL, brokenNames);
+    appState.nightSpare = restoreLeaderState(data.nightSpare, brokenNames);
+    appState.nightOverflow = restoreOverflow(data.nightOverflow, brokenNames);
+    appState.secretRows = secretRows;
+    appState.ruleIndexes = buildSecretIndexes(secretRows);
+    appState.adjacentGroupLetters = buildAdjacentGroups(secretRows);
+    appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
+    appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
+    hasRunOnce = true;
+    editingLoc = null;
+
+    const logs = [{
+      level: 'info',
+      message: `保存した配置を読み込みました（対象日: ${appState.currentDateLabel || '不明'} ／ 保存日時: ${typeof data.savedAt === 'string' ? data.savedAt : '不明'}）。`,
+    }];
+    if (brokenNames.length > 0) {
+      logs.push({
+        level: 'warn',
+        message: `保存データの一部が壊れていたため、次の方を読み飛ばしました: ${Array.from(new Set(brokenNames)).join('、')}`,
+      });
+    }
+    renderMessages(logs);
+    render();
+    scrollToMessages();
+  });
 
   // ---------- 印刷用ページ ----------
   function escapeHtml(s) {
