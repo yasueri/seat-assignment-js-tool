@@ -64,6 +64,8 @@
     overflowAppend: document.getElementById('overflow-append'),
     dateSelect: document.getElementById('date-select'),
     yearMonthLabel: document.getElementById('year-month-label'),
+    dayDateLabel: document.getElementById('day-date-label'),
+    nightDateLabel: document.getElementById('night-date-label'),
     earlyGrid: document.getElementById('early-grid'),
     lateGrid: document.getElementById('late-grid'),
     nightSeatGrid: document.getElementById('night-seat-grid'),
@@ -71,7 +73,6 @@
     nightSpareGrid: document.getElementById('night-spare-grid'),
     nightOverflowList: document.getElementById('night-overflow-list'),
     nightOverflowAppend: document.getElementById('night-overflow-append'),
-    saveSelect: document.getElementById('save-select'),
   };
   // overflow-append は再描画のたびに作り直される要素ではないため、
   // ドロップ受付は最初に1回だけ登録する（毎回登録するとリスナーが積み重なってしまう）
@@ -870,7 +871,16 @@
     }
   }
 
+  // 「3. 日勤 座席配置」「4. 夜勤 座席配置」の見出しに、現在の配置対象日を表示する
+  // （appState.currentDateLabel は自動配置の実行時・保存データの読み込み時に設定される）
+  function renderDateHeadings() {
+    const suffix = appState.currentDateLabel ? `（${appState.currentDateLabel}）` : '';
+    els.dayDateLabel.textContent = suffix;
+    els.nightDateLabel.textContent = suffix;
+  }
+
   function render() {
+    renderDateHeadings();
     renderLeaderGrid(els.earlyGrid, 'early');
     renderLeaderGrid(els.lateGrid, 'late');
     renderSeatGrid(els.seatGrid, 'seat');
@@ -1016,21 +1026,16 @@
   }
   document.getElementById('btn-check').addEventListener('click', checkPlacementViolations);
 
-  // ---------- 配置の保存・読み込み（ver4.3で追加 / ver4.5でsaveフォルダ方式に変更） ----------
+  // ---------- 配置の保存・読み込み（ver4.3で追加 / ver4.6でダウンロード方式に変更） ----------
   // 「現在の配置を保存」: いま画面に表示されている配置（手動調整・✎編集の内容を含む）
-  // を、index.htmlのあるフォルダ内の「save」フォルダへJSONファイルとして保存する
-  // （saveフォルダが存在しなければ自動的に作成する）。
-  // 「保存した配置の読み込み」: saveフォルダ内の保存ファイル一覧をセレクタ
-  // （「配置対象日」と同じ形式）に表示し、選んで「読み込み」を押すと
+  // をJSONファイルとしてダウンロードする（保存先はブラウザの既定のダウンロード
+  // フォルダになる。ブラウザ側で毎回保存先を確認する設定の場合はそちらが優先される）。
+  // 「保存した配置を読み込む」: ファイル選択ダイアログでJSONファイルを1つ選ぶと、
   // 保存した時点の配置画面を復元する。
   //
-  // ブラウザのセキュリティ上、ページが勝手にPCのフォルダへ読み書きすることは
-  // できないため、初回に「index.htmlのあるフォルダ」をフォルダ選択ダイアログで
-  // 選んでもらう（File System Access API。Chrome / Edgeが対応）。選択したフォルダは
-  // 記憶され、次回以降は原則ダイアログなしで使える（ブラウザの仕様により、
-  // 再起動後などに権限の確認だけ求められることがある）。
-  // File System Access API非対応のブラウザ（Firefoxなど）では、従来どおり
-  // ダウンロード保存＋ファイル選択ダイアログでの読み込みにフォールバックする。
+  // フォルダへの直接読み書き（File System Access API）は使わない。ダウンロード・
+  // ファイル選択のいずれも読み書き権限の確認ダイアログを必要としない一般的な
+  // ブラウザ操作のため、余計な権限確認は発生しない。
   //
   // 保存ファイルには secret.csv から推測できる情報（席固定・禁止席・隣接禁止・
   // 夜勤GL席の対象かどうか、対象座席番号、グループ記号などのバッジ情報）を
@@ -1038,8 +1043,6 @@
   // secret.csv から再計算して付け直す（reapplyBadges）。
   const SAVE_FILE_MARK = '座席配置ツール保存データ';
   const SAVE_FORMAT_VERSION = 1;
-  const SAVE_DIR_NAME = 'save';
-  const supportsFolderAccess = typeof window.showDirectoryPicker === 'function';
 
   function pad2(n) { return String(n).padStart(2, '0'); }
 
@@ -1073,7 +1076,8 @@
 
   function buildSaveData() {
     const now = new Date();
-    const stamp = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}`;
+    const targetDatePart = (appState.currentDate || '').replace(/-/g, '') || '保存';
+    const savedAtPart = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}_${pad2(now.getHours())}${pad2(now.getMinutes())}`;
     const data = {
       fileType: SAVE_FILE_MARK,
       formatVersion: SAVE_FORMAT_VERSION,
@@ -1089,112 +1093,13 @@
       nightSpare: exportLeaderState(appState.nightSpare),
       nightOverflow: exportOverflow(appState.nightOverflow),
     };
-    const filename = `座席配置_${appState.currentDate || '保存'}_${stamp}.json`;
+    const filename = `座席配置_${targetDatePart}_保存日時_${savedAtPart}.json`;
     return { data, filename };
   }
 
-  // ---- index.htmlフォルダ（保存先の親フォルダ）の取得と記憶 ----
-  let rootDirHandle = null;            // このセッションで選択済みのフォルダ
-  const saveFileHandles = new Map();   // セレクタに並べたファイル名 -> ファイルハンドル
-
-  // フォルダの選択内容（ハンドル）を次回以降も使えるよう、IndexedDBに記憶する。
-  // IndexedDBが使えない環境でも動作に支障はない（毎回フォルダを選び直すだけになる）。
-  const HANDLE_DB_NAME = 'seat-tool-folder';
-  const HANDLE_STORE_NAME = 'handles';
-  function idbOpen() {
-    return new Promise((resolve, reject) => {
-      if (typeof window.indexedDB === 'undefined') { reject(new Error('IndexedDB非対応')); return; }
-      const req = window.indexedDB.open(HANDLE_DB_NAME, 1);
-      req.onupgradeneeded = () => { req.result.createObjectStore(HANDLE_STORE_NAME); };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-  async function idbGet(key) {
-    const db = await idbOpen();
-    try {
-      return await new Promise((resolve, reject) => {
-        const req = db.transaction(HANDLE_STORE_NAME, 'readonly').objectStore(HANDLE_STORE_NAME).get(key);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-    } finally { db.close(); }
-  }
-  async function idbSet(key, value) {
-    const db = await idbOpen();
-    try {
-      await new Promise((resolve, reject) => {
-        const tx = db.transaction(HANDLE_STORE_NAME, 'readwrite');
-        tx.objectStore(HANDLE_STORE_NAME).put(value, key);
-        tx.oncomplete = resolve;
-        tx.onerror = () => reject(tx.error);
-      });
-    } finally { db.close(); }
-  }
-
-  async function verifyPermission(handle, withPrompt) {
-    const opts = { mode: 'readwrite' };
-    try {
-      if ((await handle.queryPermission(opts)) === 'granted') return true;
-      if (withPrompt && (await handle.requestPermission(opts)) === 'granted') return true;
-    } catch (e) { /* 権限確認に失敗した場合は「使えない」扱いにする */ }
-    return false;
-  }
-
-  // index.htmlのあるフォルダのハンドルを返す。
-  // interactive=true（ボタンクリック時）なら、必要に応じて権限確認ダイアログや
-  // フォルダ選択ダイアログを表示する。falseなら記憶済み・許可済みの場合のみ返す。
-  async function getRootDirHandle(interactive) {
-    if (rootDirHandle && await verifyPermission(rootDirHandle, interactive)) return rootDirHandle;
-    try {
-      const stored = await idbGet('rootDir');
-      if (stored && await verifyPermission(stored, interactive)) {
-        rootDirHandle = stored;
-        return stored;
-      }
-    } catch (e) { /* IndexedDBが使えない環境では毎回選択にフォールバック */ }
-    if (!interactive) return null;
-
-    let handle;
-    try {
-      handle = await window.showDirectoryPicker({ id: 'seat-tool-root', mode: 'readwrite' });
-    } catch (e) {
-      return null; // 選択キャンセル
-    }
-    // 選ばれたのがindex.htmlのあるフォルダかどうかを軽く確認する（強制はしない）
-    let hasIndexHtml = true;
-    try { await handle.getFileHandle('index.html'); } catch (e) { hasIndexHtml = false; }
-    if (!hasIndexHtml) {
-      const ok = confirm('選択したフォルダに index.html が見つかりません。このフォルダの中に save フォルダを作って読み書きしますが、よろしいですか？（キャンセルすると中止します）');
-      if (!ok) return null;
-    }
-    rootDirHandle = handle;
-    try { await idbSet('rootDir', handle); } catch (e) { /* 記憶できなくても動作には支障なし */ }
-    return handle;
-  }
-
-  // ---- 保存（saveフォルダへの書き込み） ----
-  async function saveToFolder(data, filename) {
-    const root = await getRootDirHandle(true);
-    if (!root) {
-      alert('保存先のフォルダ（index.htmlのあるフォルダ）が選択されなかったため、保存を中止しました。');
-      return false;
-    }
-    try {
-      // saveフォルダが存在しなければここで自動的に作成される（create: true）
-      const saveDir = await root.getDirectoryHandle(SAVE_DIR_NAME, { create: true });
-      const fileHandle = await saveDir.getFileHandle(filename, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(JSON.stringify(data, null, 2));
-      await writable.close();
-      return true;
-    } catch (e) {
-      alert(`保存に失敗しました（${e && e.message ? e.message : e}）。フォルダの権限などをご確認ください。`);
-      return false;
-    }
-  }
-
-  // File System Access API非対応ブラウザ用: 従来のダウンロード保存
+  // ---- 保存（従来方式: JSONファイルのダウンロード） ----
+  // File System Access API 非対応のブラウザ（Firefox / Safari など）向けのフォールバック。
+  // <a download> 方式のため、保存先はブラウザの既定のダウンロードフォルダに固定される。
   function saveByDownload(data, filename) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1207,99 +1112,50 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  // ---- 保存（File System Access API: 保存先選択ダイアログ） ----
+  // showSaveFilePicker() に対応したブラウザ（Chrome / Edge 等）では、
+  // 「名前をつけて保存」と同様のダイアログで保存先フォルダとファイル名を選ばせる。
+  // ユーザーがファイルを選んだ時点で書き込み許可が自動的に与えられる仕様のため、
+  // 別途「このサイトにファイルの編集を許可しますか」という確認は表示されない。
+  function supportsSaveFilePicker() {
+    return typeof window.showSaveFilePicker === 'function' && window.isSecureContext;
+  }
+  async function saveByPicker(data, filename) {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: filename,
+      types: [{ description: 'JSON ファイル', accept: { 'application/json': ['.json'] } }],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(JSON.stringify(data, null, 2));
+    await writable.close();
+  }
+
   document.getElementById('btn-save').addEventListener('click', async () => {
     if (!hasRunOnce) {
       alert('保存できる配置がありません。先に「自動配置を実行」するか、保存した配置を読み込んでください。');
       return;
     }
     const { data, filename } = buildSaveData();
-    if (!supportsFolderAccess) {
+
+    if (supportsSaveFilePicker()) {
+      try {
+        await saveByPicker(data, filename);
+        renderMessages([{ level: 'info', message: `配置を保存しました（${filename}）。` }]);
+      } catch (err) {
+        if (err && err.name === 'AbortError') {
+          // ユーザーが保存ダイアログをキャンセルした場合は何もしない
+          return;
+        }
+        // 想定外のエラー時は従来方式（ダウンロード）にフォールバックする
+        saveByDownload(data, filename);
+        renderMessages([{ level: 'warn', message: `保存先選択でエラーが発生したため、ダウンロードフォルダに保存しました（${filename}）。` }]);
+      }
+    } else {
       saveByDownload(data, filename);
-      renderMessages([{ level: 'info', message: `このブラウザはフォルダへの直接保存に対応していないため、ダウンロードとして保存しました（${filename}）。ダウンロード後、index.htmlのあるフォルダ内のsaveフォルダへ移動してください。` }]);
-      return;
+      renderMessages([{ level: 'info', message: `配置をダウンロードしました（${filename}）。ブラウザの既定のダウンロード先に保存されます。` }]);
     }
-    const ok = await saveToFolder(data, filename);
-    if (!ok) return;
-    renderMessages([{ level: 'info', message: `saveフォルダに保存しました（${filename}）。` }]);
-    // 読み込み用の一覧も更新し、保存したばかりのファイルを選択しておく
-    await refreshSaveFileSelect(false, filename);
     // 保存はその場で完了する操作のため、メッセージ欄へのスクロールは行わない
   });
-
-  // ---- 保存ファイル一覧（読み込み用セレクタ） ----
-  function setSaveSelectPlaceholder(text) {
-    const select = els.saveSelect;
-    select.innerHTML = '';
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = text;
-    select.appendChild(opt);
-    select.disabled = true;
-    saveFileHandles.clear();
-  }
-
-  // saveフォルダの中の *.json を新しい順に一覧化してセレクタに反映する。
-  // interactive=true の場合は、必要に応じてフォルダ選択ダイアログを表示する。
-  // selectName を渡すと、一覧更新後にそのファイルを選択状態にする。
-  async function refreshSaveFileSelect(interactive, selectName) {
-    if (!supportsFolderAccess) {
-      setSaveSelectPlaceholder('（このブラウザはフォルダからの一覧取得に対応していません）');
-      return;
-    }
-    const root = await getRootDirHandle(interactive);
-    if (!root) {
-      if (interactive) setSaveSelectPlaceholder('（フォルダが選択されていません。「一覧を更新」を押して選択してください）');
-      return;
-    }
-    let saveDir = null;
-    try { saveDir = await root.getDirectoryHandle(SAVE_DIR_NAME); } catch (e) { saveDir = null; }
-    if (!saveDir) {
-      setSaveSelectPlaceholder('（saveフォルダがまだありません。先に「現在の配置を保存」を実行してください）');
-      return;
-    }
-    const files = [];
-    try {
-      for await (const entry of saveDir.values()) {
-        if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.json')) continue;
-        let lastModified = 0;
-        try { lastModified = (await entry.getFile()).lastModified; } catch (e) { /* 取得できなければ0扱い */ }
-        files.push({ name: entry.name, handle: entry, lastModified });
-      }
-    } catch (e) {
-      setSaveSelectPlaceholder('（saveフォルダの一覧を取得できませんでした）');
-      return;
-    }
-    if (files.length === 0) {
-      setSaveSelectPlaceholder('（saveフォルダに保存ファイルがありません）');
-      return;
-    }
-    files.sort((a, b) => b.lastModified - a.lastModified); // 新しい順
-
-    const select = els.saveSelect;
-    select.innerHTML = '';
-    saveFileHandles.clear();
-    files.forEach(f => {
-      const opt = document.createElement('option');
-      opt.value = f.name;
-      opt.textContent = f.name;
-      select.appendChild(opt);
-      saveFileHandles.set(f.name, f.handle);
-    });
-    select.disabled = false;
-    if (selectName && saveFileHandles.has(selectName)) select.value = selectName;
-  }
-
-  document.getElementById('btn-refresh-saves').addEventListener('click', () => {
-    if (!supportsFolderAccess) {
-      alert('このブラウザはフォルダからの一覧取得に対応していません（Chrome / Edgeでご利用いただけます）。「読み込み」ボタンからファイルを直接選択してください。');
-      return;
-    }
-    refreshSaveFileSelect(true);
-  });
-
-  // ページを開いた時点で、記憶済み・許可済みのフォルダがあれば一覧を自動で埋める
-  // （権限が残っていない場合は何もしない。その場合は「一覧を更新」で選択し直す）
-  if (supportsFolderAccess) refreshSaveFileSelect(false);
 
   // ---- 読み込み ----
 
@@ -1450,32 +1306,11 @@
     scrollToMessages();
   }
 
-  const loadInput = document.getElementById('file-load'); // 非対応ブラウザ用のフォールバック
+  const loadInput = document.getElementById('file-load');
 
-  document.getElementById('btn-load').addEventListener('click', async () => {
-    // 非対応ブラウザでは従来どおりファイル選択ダイアログで読み込む
-    if (!supportsFolderAccess) {
-      if (hasRunOnce && !confirm('現在表示中の配置は失われます。保存した配置を読み込みますか？')) return;
-      loadInput.click();
-      return;
-    }
-    const name = els.saveSelect.value;
-    if (!name || !saveFileHandles.has(name)) {
-      alert('読み込む保存ファイルを選択してください（一覧が空の場合は「一覧を更新」を押してください）。');
-      return;
-    }
+  document.getElementById('btn-load').addEventListener('click', () => {
     if (hasRunOnce && !confirm('現在表示中の配置は失われます。保存した配置を読み込みますか？')) return;
-    let text;
-    try {
-      const fileHandle = saveFileHandles.get(name);
-      text = await (await fileHandle.getFile()).text();
-    } catch (e) {
-      alert('保存ファイルを開けませんでした。ファイルが移動・削除された可能性があります。「一覧を更新」で一覧を取り直してください。');
-      return;
-    }
-    const parsed = parseSaveJsonText(text);
-    if (parsed.error) { alert(parsed.error); return; }
-    applySaveData(parsed.data);
+    loadInput.click();
   });
 
   loadInput.addEventListener('change', async () => {

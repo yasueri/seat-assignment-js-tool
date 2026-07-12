@@ -40,6 +40,21 @@ window.SeatTool.csv = (function () {
     return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
   }
 
+  // ---------- 日付処理 ----------
+  // 「2026-06-01」「2026/6/1」「2026-6-1」「2026/06/01」のいずれの形式も受け付け、
+  // ツール内部で統一して使う「YYYY-MM-DD」（ゼロ埋め・ハイフン区切り）に正規化する。
+  // 形式が不正、または実在しない日付（2026/2/31など）の場合は null を返す。
+  function normalizeDate(str) {
+    const m = String(str).trim().match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+    if (!m) return null;
+    const y = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    const dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+
   // ---------- 共通ヘルパー ----------
   function cell(row, index) { return (row[index] || '').trim(); }
 
@@ -97,17 +112,19 @@ window.SeatTool.csv = (function () {
 
     dataRows.forEach((r, i) => {
       const rowLabel = `月間シフトCSV ${i + 2}行目`;
-      const date = cell(r, 0);
+      const rawDate = cell(r, 0);
       const name = cell(r, 1);
       const start = cell(r, 2);
       const end = cell(r, 3);
       const frontRaw = cell(r, 4);
       const backRaw = cell(r, 5);
       const role = cell(r, 6);
-      if (!date && !name) return; // 完全な空行
+      if (!rawDate && !name) return; // 完全な空行
 
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        logs.push({ level: 'warn', message: `${rowLabel}: 日付の形式（YYYY-MM-DD）が不正なため読み飛ばしました（${date || '空欄'}）` });
+      // 「2026-06-01」「2026/6/1」などを内部形式「YYYY-MM-DD」に正規化する
+      const date = normalizeDate(rawDate);
+      if (!date) {
+        logs.push({ level: 'warn', message: `${rowLabel}: 日付の形式（YYYY-MM-DD または YYYY/M/D）が不正なため読み飛ばしました（${rawDate || '空欄'}）` });
         return;
       }
       if (!name) {
@@ -275,7 +292,7 @@ window.SeatTool.csv = (function () {
   }
 
   return {
-    parseCSV, timeToMinutes,
+    parseCSV, timeToMinutes, normalizeDate,
     parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
     isNightShift, isLateShift,
     parseRookieRows, parseSecretRows,

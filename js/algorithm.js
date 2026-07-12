@@ -484,11 +484,12 @@ window.SeatTool.algorithm = (function () {
       const flagged = ordered.filter(p => flagSet.has(p.name));
       const pool = flagged.length > 0 ? flagged : ordered;
       glPerson = pool[Math.floor(Math.random() * pool.length)];
+      // 候補が複数いてランダム選出になった場合のみ通知する。
+      // 席固定「夜勤GL席」の該当者が1名で、その人がそのまま夜勤GL枠に
+      // 入った場合は、指定どおりの結果のためメッセージは出さない（ver4.5）。
       if (pool.length > 1) {
         const poolLabel = flagged.length > 0 ? '席固定（夜勤GL席）のある' : '';
         logs.push({ level: 'info', message: `夜勤GL枠（2行1列目）には、${poolLabel}${pool.length}名の中からランダムで${glPerson.name}さんを配置しました。` });
-      } else {
-        logs.push({ level: 'info', message: `夜勤GL枠（2行1列目）に、席固定（夜勤GL席）のある${glPerson.name}さんを配置しました。` });
       }
     }
     glState['2-1'] = glPerson;

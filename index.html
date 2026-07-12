@@ -15,11 +15,17 @@
   <h2><span class="step-num">1</span>CSV読み込み</h2>
 
   <div class="dropzone" id="csv-dropzone">
-    <p><strong>ここに 月間シフトCSV・rookie.csv・secret.csv をまとめてドラッグ&ドロップ</strong></p>
+    <p><strong>ここに 月間shift.csv・rookie.csv・secret.csv をまとめてドラッグ&ドロップ</strong></p>
     <p class="dropzone-sub">ファイル名から自動的に振り分けます（ファイル名に shift / rookie / secret のいずれかを含めてください）</p>
   </div>
   <p class="dropzone-or">または、個別に選択:</p>
 
+  <div class="file-row">
+    <label class="file-btn" for="file-shift">月間シフト選択</label>
+    <input type="file" id="file-shift" accept=".csv" class="visually-hidden">
+    <span class="file-name-label">例: 2026-06_shift.csv</span>
+    <span class="file-status empty" id="status-shift">未読み込み</span>
+  </div>
   <div class="file-row">
     <label class="file-btn" for="file-rookie">新人リスト選択</label>
     <input type="file" id="file-rookie" accept=".csv" class="visually-hidden">
@@ -31,12 +37,6 @@
     <input type="file" id="file-secret" accept=".csv" class="visually-hidden">
     <span class="file-name-label">secret.csv</span>
     <span class="file-status empty" id="status-secret">未読み込み</span>
-  </div>
-  <div class="file-row">
-    <label class="file-btn" for="file-shift">月間シフトCSV選択</label>
-    <input type="file" id="file-shift" accept=".csv" class="visually-hidden">
-    <span class="file-name-label">例: 2026-06_shift.csv</span>
-    <span class="file-status empty" id="status-shift">未読み込み</span>
   </div>
 
   <div class="date-picker-row" id="date-picker-row">
@@ -63,9 +63,9 @@
       <tr><td>2026-06-01</td><td>佐藤花子</td><td>22:00</td><td>32:00</td><td>FALSE</td><td>FALSE</td><td>GL</td></tr>
     </table>
     <p>
-      日付は <code>YYYY-MM-DD</code> 形式。読み込み後、「配置対象日」で日を選ぶとその日の出勤者だけを抽出します（年月はCSVから自動表示）。<br>
+      日付は <code>YYYY-MM-DD</code> または <code>YYYY/M/D</code> 形式（<code>2026-06-01</code> と <code>2026/6/1</code> のどちらでも可）。読み込み後、「配置対象日」で日を選ぶとその日の出勤者だけを抽出します（年月はCSVから自動表示）。<br>
       終了時刻が24:00を超える場合は日跨ぎを表します（例: 開始22:00・終了32:00 → 当日22:00に出勤し翌日8:00に退勤）。<br>
-      前残業・後残業は <code>TRUE</code> / <code>FALSE</code> で入力してください。前残業=開始時刻が残業、後残業=終了時刻が残業という意味です（カード上で時刻が黄色く表示されます）。<br>
+      前残業・後残業がTRUEの場合は残業あり、FALSEの場合は定時という意味です。（カード上で時刻が黄色マーカーと※で表示されます）。<br>
       役割は「役席」「GL」「OP」のいずれかです。
     </p>
     <p>
@@ -128,7 +128,7 @@
 </div>
 
 <div class="panel">
-  <h2><span class="step-num">3</span>日勤 座席配置（ドラッグ＆ドロップで人単位の入れ替えができます）</h2>
+  <h2><span class="step-num">3</span>日勤 座席配置<span id="day-date-label"></span></h2>
 
   <details class="help">
     <summary>座席カードの見かたについて</summary>
@@ -148,6 +148,17 @@
       出退勤時刻が黄色い場合は、その時刻が残業（前残業／後残業）であることを示します。<br>
       配置しきれなかったスタッフは、右の「あふれ」欄に表示されます。早番・遅番エリアの6名を超えた役席・GLは「あふれ」には入らず、専用のメッセージで知らせます。<br>
       バッジや✎アイコンなど座席カードの見かたは、下の「4. 夜勤 座席配置」の座席グリッドでも同じです。
+    </p>
+    </div>
+  </details>
+
+  <details class="help">
+    <summary>操作方法について</summary>
+    <div class="help-content">
+    <p>
+      座席カードや早番・遅番エリアのカードは、ドラッグ＆ドロップで人単位の入れ替えができます。同じ枠内はもちろん、早番⇔遅番、座席⇔あふれなど、別の枠との間でも自由に移動できます。<br>
+      各カードの氏名の右にある✎アイコンから、氏名・時間の手入力修正や、その日の配置からの削除ができます。<br>
+      ドラッグ操作は配置ルールを自動チェックしないため、手動で動かした後は「手動変更後 配置違反チェック」で確認してください。配置違反チェック・印刷・配置の保存/読み込みのボタンは、下の「4. 夜勤 座席配置」パネルの末尾にあります（日勤・夜勤の両方が対象です）。
     </p>
     </div>
   </details>
@@ -173,14 +184,10 @@
     </div>
   </div>
 
-  <p class="footer-note">
-    各カードの✎アイコンから、氏名・時間の手入力修正や、その日の配置からの削除ができます。<br>
-    配置違反チェック・印刷・配置の保存/読み込みのボタンは、下の「4. 夜勤 座席配置」パネルの末尾にあります（日勤・夜勤の両方が対象です）。
-  </p>
 </div>
 
 <div class="panel">
-  <h2><span class="step-num">4</span>夜勤 座席配置（ドラッグ＆ドロップで人単位の入れ替えができます）</h2>
+  <h2><span class="step-num">4</span>夜勤 座席配置<span id="night-date-label"></span></h2>
 
   <details class="help">
     <summary>夜勤パネルの見かたについて</summary>
@@ -194,6 +201,15 @@
     </p>
     <p>
       左側の見出しのない枠は予備枠です。自動配置では使いませんが、カードの一時置き場や印刷後の手書きスペースとして使えます。カードは日勤と同じく、どのエリアの間でも自由にドラッグで移動できます（移動後は「手動変更後 配置違反チェック」で確認してください。日勤・夜勤を入れ違えた場合もこのチェックで検出されます）。
+    </p>
+    </div>
+  </details>
+
+  <details class="help">
+    <summary>操作方法について</summary>
+    <div class="help-content">
+    <p>
+      「3. 日勤 座席配置」パネルの「操作方法について」を参照してください。
     </p>
     </div>
   </details>
@@ -223,25 +239,39 @@
     <button id="btn-check" class="secondary multiline-btn"><span>手動変更後</span><span>配置違反チェック</span></button>
     <button id="btn-print" class="secondary multiline-btn"><span>印刷用ページ</span><span>を開く</span></button>
     <button id="btn-save" class="secondary multiline-btn"><span>現在の配置を</span><span>保存</span></button>
-  </div>
-  <div class="date-picker-row save-load-row">
-    <span class="date-picker-label">保存した配置の読み込み</span>
-    <select id="save-select" class="date-select" disabled>
-      <option value="">（「一覧を更新」でsaveフォルダから取得します）</option>
-    </select>
-    <button id="btn-refresh-saves" class="secondary">一覧を更新</button>
-    <button id="btn-load" class="secondary">読み込み</button>
+    <button id="btn-load" class="secondary multiline-btn"><span>保存した配置を</span><span>読み込む</span></button>
     <input type="file" id="file-load" accept=".json,application/json" class="visually-hidden">
   </div>
 
-  <p class="footer-note">
-    ドラッグ操作は配置ルールを自動チェックしません。手動で動かした後は「手動変更後 配置違反チェック」ボタンで違反がないか確認してください（日勤・夜勤の両方の座席グリッドのルール違反に加え、日勤・夜勤の入れ違い＝夜勤の人が日勤側にいる等や、夜勤の役席・GLがいるのに「夜勤GL」枠が空になっているケースも検出します）。<br>
-    印刷用ページは、1ページ目＝日勤、2ページ目＝夜勤のA4各1枚で出力されます（両面コピー用）。<br>
-    「現在の配置を保存」で、いま表示中の配置（手動調整の内容を含む）を index.html のあるフォルダ内の save フォルダへJSONファイルとして保存します（saveフォルダがなければ自動で作成されます）。初回はブラウザのダイアログで「index.htmlのあるフォルダ」を選択し、アクセスを許可してください。<br>
-    「保存した配置の読み込み」は、「一覧を更新」でsaveフォルダ内の保存ファイルを取得し、選んで「読み込み」を押すと保存した時点の配置画面が復元されます。<br>
-    ※保存ファイルには secret.csv から推測できる情報（席固定・禁止席などのバッジ情報を含む）は一切含まれません。読み込み後に配置違反チェックやバッジ表示を使うには、別途 secret.csv の読み込みが必要です（既に読み込み済みなら自動的に適用されます）。<br>
-    各カードの✎アイコンから、氏名・時間の手入力修正や、その日の配置からの削除ができます。
-  </p>
+  <details class="help">
+    <summary>手動変更後 配置違反チェックについて</summary>
+    <div class="help-content">
+    <p>
+      日勤・夜勤それぞれの座席グリッドのルール違反に加えて、日勤・夜勤の入れ違い（夜勤の人が日勤側にいる、など）や、夜勤の役席・GLがいるのに「夜勤GL」枠が空になっているケースも検出します。
+    </p>
+    </div>
+  </details>
+
+  <details class="help">
+    <summary>印刷について</summary>
+    <div class="help-content">
+    <p>
+      「印刷用ページを開く」ボタンから、1ページ目＝日勤、2ページ目＝夜勤のA4各1枚で印刷用ページを開きます（両面コピー用）。
+    </p>
+    </div>
+  </details>
+
+  <details class="help">
+    <summary>配置の保存・読み込みについて</summary>
+    <div class="help-content">
+    <p>
+      「現在の配置を保存」で、いま表示中の配置（手動調整の内容を含む）をJSONファイルとしてダウンロードします（ブラウザの既定のダウンロード先に保存されます）。<br>
+      「保存した配置を読み込む」で、ダウンロードしておいたJSONファイルを選択すると、保存した時点の配置画面が復元されます。<br>
+      ※保存ファイルには secret.csv から推測できる情報（席固定・禁止席などのバッジ情報を含む）は一切含まれません。読み込み後に配置違反チェックやバッジ表示を使うには、別途 secret.csv の読み込みが必要です（既に読み込み済みなら自動的に適用されます）。
+    </p>
+    </div>
+  </details>
+
 </div>
 
 <script src="js/csv.js"></script>
