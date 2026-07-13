@@ -382,15 +382,15 @@
     grid-template-rows:repeat(4, auto);
     gap:14px;
   }
-  .seat{
+.seat{
     background:#F9FAFC;
     border:1px solid var(--border);
     border-radius:9px;
-    padding:9px;
+    padding:5px 9px 9px;   /* 上だけ 9px→5px に縮小 */
     min-height:104px;
     display:flex;
     flex-direction:column;
-    gap:7px;
+    gap:3px;               /* 7px→3px、座席番号と空席枠の間隔を縮小 */
   }
   .seat.spacer{
     background:transparent;
@@ -403,6 +403,7 @@
     color:var(--text-muted);
     text-align:right;
     padding-right:2px;
+    line-height:1;         /* フォントの行間による余分な高さを削る */
   }
   .slot{
     min-height:42px;
