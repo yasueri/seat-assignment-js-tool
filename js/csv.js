@@ -208,29 +208,59 @@ window.SeatTool.csv = (function () {
     return { rows: result, logs };
   }
 
+  // 全角数字を半角に変換する（優先フラグ列の数値を半角・全角どちらでも受け付けるため）
+  function normalizeDigits(str) {
+    return String(str).replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+  }
+
   // ---------- secret.csv ----------
   // seatByNumber は algorithm.js が提供する（座席番号 -> {row,col} の変換・妥当性チェックに使用）
-  // 「禁止席」「席固定」の対象座席は、半角または全角スペース区切りで複数指定できる。
-  // 「席固定」の対象座席には、座席番号（1〜15）に加えて特別な値「夜勤GL席」も指定できる
-  // （夜勤の役席・GLが複数名いる日に、夜勤GL枠2行1列目へ優先的に入れたい人を指定するため）。
-  // 「夜勤GL席」は席固定でのみ有効（禁止席には指定できない）。座席番号と混在も可能
+  // 「禁止席」「固定席」「要サポート」の対象座席は、半角または全角スペース区切りで
+  // 複数指定できる。「固定席」の対象座席には、座席番号（1〜15）に加えて特別な値
+  // 「夜勤GL席」も指定できる（夜勤の役席・GLが複数名いる日に、夜勤GL枠2行1列目へ
+  // 優先的に入れたい人を指定するため）。「夜勤GL席」は固定席でのみ有効
+  // （禁止席・要サポートには指定できない）。座席番号と混在も可能
   // （例: 「夜勤GL席 3」＝夜勤GL枠か3番のどちらか）。
+  // 「要サポート」は、新人は卒業したが独り立ちまであと一歩のスタッフを表す種別で、
+  // 入力形式（対象座席の複数指定・入力順が優先順位になる点も含め）は固定席と全く同じ。
   // 同じ人が複数行に分かれて書かれている場合は duplicateDesignatedNames /
-  // duplicateForbiddenNames として検出し、呼び出し側で配置を止める判断に使う。
+  // duplicateForbiddenNames / duplicateSupportNames として検出し、呼び出し側で
+  // 配置を止める判断に使う。
+  // 5列目「優先フラグ」は種別を問わずどの行にも指定でき、対象1の氏名に対して
+  // 適用される（半角・全角どちらの数字も可）。値が入っている場合、その人は他の
+  // どの配置ルールよりも先に処理される（数値が小さいほど優先。複数行にまたがって
+  // 別の値が入力されていた場合は最小値を採用する）。
   function parseSecretRows(text, seatByNumber) {
     const logs = [];
     const raw = parseCSV(text);
-    checkHeader(raw, ['種別', '対象1', '対象2', '対象座席'], 'secret.csv', logs);
+    checkHeader(raw, ['種別', '対象1', '対象2', '対象座席', '優先フラグ'], 'secret.csv', logs);
 
     const dataRows = raw.slice(1);
     const result = [];
     const seenDesignated = new Set();
     const seenForbidden = new Set();
+    const seenSupport = new Set();
     const duplicateDesignated = new Set();
     const duplicateForbidden = new Set();
+    const duplicateSupport = new Set();
 
     dataRows.forEach((r, i) => {
       const type = cell(r, 0);
+      const targetNameForFlag = cell(r, 1); // 優先フラグは対象1の氏名に対して適用する
+      const flagCell = cell(r, 4);
+      if (flagCell) {
+        if (!targetNameForFlag) {
+          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 優先フラグが入力されていますが対象1が空欄のため無視しました` });
+        } else {
+          const normalized = normalizeDigits(flagCell).trim();
+          if (/^\d+$/.test(normalized)) {
+            result.push({ type: 'priority_flag', name: targetNameForFlag, flag: parseInt(normalized, 10) });
+          } else {
+            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 優先フラグ「${flagCell}」は数値として認識できません` });
+          }
+        }
+      }
+
       if (type === '隣接禁止') {
         const name1 = cell(r, 1);
         const name2 = cell(r, 2);
@@ -239,16 +269,16 @@ window.SeatTool.csv = (function () {
           return;
         }
         result.push({ type: 'adjacent_forbidden', name1, name2 });
-      } else if (type === '禁止席' || type === '席固定') {
+      } else if (type === '禁止席' || type === '固定席' || type === '要サポート') {
         const name = cell(r, 1);
         const seatCell = cell(r, 3);
         if (!name || !seatCell) {
           logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: ${type}の情報が不足しています` });
           return;
         }
-        const kind = type === '禁止席' ? 'seat_forbidden' : 'seat_designated';
-        const seenSet = kind === 'seat_forbidden' ? seenForbidden : seenDesignated;
-        const dupSet = kind === 'seat_forbidden' ? duplicateForbidden : duplicateDesignated;
+        const kind = type === '禁止席' ? 'seat_forbidden' : (type === '固定席' ? 'seat_designated' : 'seat_support');
+        const seenSet = kind === 'seat_forbidden' ? seenForbidden : (kind === 'seat_designated' ? seenDesignated : seenSupport);
+        const dupSet = kind === 'seat_forbidden' ? duplicateForbidden : (kind === 'seat_designated' ? duplicateDesignated : duplicateSupport);
         if (seenSet.has(name)) dupSet.add(name);
         seenSet.add(name);
 
@@ -258,7 +288,7 @@ window.SeatTool.csv = (function () {
         tokens.forEach(tok => {
           if (tok === '夜勤GL席') {
             if (kind !== 'seat_designated') {
-              logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「夜勤GL席」は席固定でのみ指定できます（禁止席には指定できません）` });
+              logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「夜勤GL席」は固定席でのみ指定できます（禁止席・要サポートには指定できません）` });
               return;
             }
             result.push({ type: 'night_gl_designated', name });
@@ -279,7 +309,7 @@ window.SeatTool.csv = (function () {
           result.push({ type: kind, name, row: seat.row, col: seat.col });
         });
       } else {
-        logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 種別「${type}」は認識できません（「隣接禁止」「禁止席」「席固定」のいずれか）` });
+        logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 種別「${type}」は認識できません（「隣接禁止」「禁止席」「固定席」「要サポート」のいずれか）` });
       }
     });
 
@@ -288,6 +318,95 @@ window.SeatTool.csv = (function () {
       logs,
       duplicateDesignatedNames: Array.from(duplicateDesignated),
       duplicateForbiddenNames: Array.from(duplicateForbidden),
+      duplicateSupportNames: Array.from(duplicateSupport),
+    };
+  }
+
+  // ---------- ojt.csv ----------
+  // 列: 教官名, OJT一人目, OJT二人目, 対象座席
+  // 教官1名につき1行。OJT二人目は空欄でよい（その日の担当が1名のみの場合）。
+  // 対象座席は「単独配置（教官とOJT一人目のみが同席する場合）」の候補座席を
+  // 優先順で指定する。空欄なら既定順（15→12→8→他）。座席番号を書くとその座席が
+  // 先頭に来て、残りは既定順のまま続く（例:「12」→12→15→8→他、
+  // 「12 4」→12→4→15→8→他）。半角・全角スペースどちらでも区切りとして使える。
+  // OJT二人目がいる場合のペア席探索順は、この対象座席から算出する「単独時の順で
+  // 12と15のどちらが先に来るか」によって決まる（詳しい組み合わせはalgorithm.js側の
+  // 固定値・readme.txtを参照）。ojt.csv自体にペアの座席番号を書く必要はない。
+  function parseOjtRows(text, seatByNumber) {
+    const logs = [];
+    const raw = parseCSV(text);
+    checkHeader(raw, ['教官名', 'OJT一人目', 'OJT二人目', '対象座席'], 'ojt.csv', logs);
+
+    const dataRows = raw.slice(1);
+    const result = [];
+    const seenMentors = new Set();
+    const duplicateMentors = new Set();
+    const traineeOwner = new Map(); // OJT対象者名 -> 最初に見つかった教官名（重複検出用）
+    const duplicateTrainees = new Set();
+
+    dataRows.forEach((r, i) => {
+      const rowLabel = `ojt.csv ${i + 2}行目`;
+      const mentorName = cell(r, 0);
+      const ojt1 = cell(r, 1);
+      const ojt2 = cell(r, 2);
+      const seatCell = cell(r, 3);
+      if (!mentorName && !ojt1 && !ojt2 && !seatCell) return; // 完全な空行
+
+      if (!mentorName) {
+        logs.push({ level: 'warn', message: `${rowLabel}: 教官名が空欄のため読み飛ばしました` });
+        return;
+      }
+      if (!ojt1) {
+        logs.push({ level: 'warn', message: `${rowLabel}: OJT一人目が空欄のため読み飛ばしました（${mentorName}）` });
+        return;
+      }
+      if (ojt2 && ojt2 === ojt1) {
+        logs.push({ level: 'warn', message: `${rowLabel}: OJT一人目とOJT二人目に同じ氏名（${ojt1}）が指定されています。読み飛ばしました` });
+        return;
+      }
+      if (seenMentors.has(mentorName)) {
+        duplicateMentors.add(mentorName);
+        logs.push({ level: 'error', message: `ojt.csv: 教官「${mentorName}」が複数行に記載されています。1名につき1行にまとめてください。` });
+        return;
+      }
+      seenMentors.add(mentorName);
+
+      const trainees = [ojt1, ojt2].filter(Boolean);
+      trainees.forEach(name => {
+        if (traineeOwner.has(name) && traineeOwner.get(name) !== mentorName) {
+          duplicateTrainees.add(name);
+          logs.push({ level: 'error', message: `ojt.csv: OJT対象者「${name}」が複数の教官（${traineeOwner.get(name)}・${mentorName}）に紐づいています。` });
+        }
+        traineeOwner.set(name, mentorName);
+      });
+
+      // 対象座席: 半角・全角スペース区切りで複数指定できる（先頭に来る優先順）
+      const seatOrder = [];
+      if (seatCell) {
+        const tokens = seatCell.split(/[ \u3000]+/).filter(Boolean);
+        tokens.forEach(tok => {
+          if (!/^\d+$/.test(tok)) {
+            logs.push({ level: 'warn', message: `${rowLabel}: 「${tok}」は座席番号として認識できません` });
+            return;
+          }
+          const seatNum = parseInt(tok, 10);
+          const seat = seatByNumber(seatNum);
+          if (!seat) {
+            logs.push({ level: 'warn', message: `${rowLabel}: 座席番号${seatNum}は存在しません` });
+            return;
+          }
+          if (!seatOrder.includes(seatNum)) seatOrder.push(seatNum);
+        });
+      }
+
+      result.push({ mentorName, trainees, seatOrder });
+    });
+
+    return {
+      rows: result,
+      logs,
+      duplicateMentorNames: Array.from(duplicateMentors),
+      duplicateTraineeNames: Array.from(duplicateTrainees),
     };
   }
 
@@ -295,6 +414,6 @@ window.SeatTool.csv = (function () {
     parseCSV, timeToMinutes, normalizeDate,
     parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
     isNightShift, isLateShift,
-    parseRookieRows, parseSecretRows,
+    parseRookieRows, parseSecretRows, parseOjtRows,
   };
 })();

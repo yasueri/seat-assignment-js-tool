@@ -9,12 +9,12 @@
 
   const {
     parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
-    parseRookieRows, parseSecretRows, timeToMinutes, isNightShift,
+    parseRookieRows, parseSecretRows, parseOjtRows, timeToMinutes, isNightShift,
   } = NS.csv;
   const {
     SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
     buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
-    seatByNumber, numberOfKey, numberOfSeat,
+    seatByNumber, numberOfKey, numberOfSeat, buildOjtIndexes,
   } = NS.algorithm;
 
   const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
@@ -38,7 +38,7 @@
   }
 
   // ---------- アプリの状態 ----------
-  const rawText = { shift: null, rookie: null, secret: null };
+  const rawText = { shift: null, rookie: null, secret: null, ojt: null };
   const appState = {
     seats: initEmptyState(), early: initLeaderState(), late: initLeaderState(),
     overflow: [],
@@ -50,6 +50,9 @@
     // secret.csvのパース結果（保存ファイルへの書き出しと、読み込み時の
     // ruleIndexes / adjacentGroupLetters の再構築に使う）
     secretRows: null,
+    // ojt.csvのパース結果とインデックス（教官・OJTのバッジ再計算・違反チェックに使用。
+    // secret.csvと同様、保存ファイルには含めず、読み込み時にojt.csvから作り直す）
+    ojtRows: null, ojtIndexes: null,
   };
   let dragSource = null;
   let hasRunOnce = false;
@@ -97,6 +100,7 @@
     shift: document.getElementById('status-shift'),
     rookie: document.getElementById('status-rookie'),
     secret: document.getElementById('status-secret'),
+    ojt: document.getElementById('status-ojt'),
   };
 
   function markFileLoaded(key, filename) {
@@ -120,6 +124,8 @@
       // その場で再構築する。これにより、保存した配置を読み込んだ後に
       // secret.csvを読み込む、という順序でも違反チェックとバッジが有効になる。
       if (key === 'secret' && hasRunOnce) refreshRuleIndexesFromSecret();
+      // ojt.csvも同様に、既に配置が存在する場合はその場でバッジ表示を再構築する
+      if (key === 'ojt' && hasRunOnce) refreshOjtIndexesFromOjt();
     } catch (e) {
       markFileFailed(key);
       if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
@@ -140,6 +146,22 @@
     renderMessages([
       ...secretParsed.logs,
       { level: 'info', message: 'secret.csvを読み込み、違反チェック用のルールとバッジ表示を更新しました。' },
+    ]);
+    scrollToMessages();
+  }
+
+  // secret.csvと同様、現在読み込まれているojt.csv（rawText.ojt）から
+  // ojtIndexesを作り直し、配置済みカードの教官・OJTバッジ表示を再計算する。
+  // ※座席そのものの再配置は行わない（既存の配置を崩さないため）。
+  function refreshOjtIndexesFromOjt() {
+    const ojtParsed = parseOjtRows(rawText.ojt, seatByNumber);
+    appState.ojtRows = ojtParsed.rows;
+    appState.ojtIndexes = buildOjtIndexes(ojtParsed.rows);
+    reapplyBadges();
+    render();
+    renderMessages([
+      ...ojtParsed.logs,
+      { level: 'info', message: 'ojt.csvを読み込み、教官・OJTのバッジ表示を更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
     ]);
     scrollToMessages();
   }
@@ -202,14 +224,16 @@
   setupFileInput('file-shift', 'shift');
   setupFileInput('file-rookie', 'rookie');
   setupFileInput('file-secret', 'secret');
+  setupFileInput('file-ojt', 'ojt');
 
   // ---------- CSVファイルのまとめてドラッグ&ドロップ ----------
-  // ファイル名に含まれる文字列から、shift/rookie/secretのどれに該当するかを判定する
+  // ファイル名に含まれる文字列から、shift/rookie/secret/ojtのどれに該当するかを判定する
   function classifyFileName(filename) {
     const lower = filename.toLowerCase();
     if (lower.includes('shift')) return 'shift';
     if (lower.includes('rookie')) return 'rookie';
     if (lower.includes('secret')) return 'secret';
+    if (lower.includes('ojt')) return 'ojt';
     return null;
   }
 
@@ -229,7 +253,7 @@
       await loadFileInto(key, file);
     }
     if (unmatched.length > 0) {
-      alert(`ファイル名から種類を判別できませんでした: ${unmatched.join(', ')}\nファイル名に shift / rookie / secret のいずれかを含めてください。`);
+      alert(`ファイル名から種類を判別できませんでした: ${unmatched.join(', ')}\nファイル名に shift / rookie / secret / ojt のいずれかを含めてください。`);
     }
   });
 
@@ -265,17 +289,30 @@
   }
 
   // 抽出した1日分の行を、以下の4つに振り分ける。
-  //   opRows          … 日勤座席グリッド用（OPかつ夜勤でない）
-  //   leaderRows      … 早番・遅番エリア用（役席・GLかつ夜勤でない）
+  //   opRows          … 日勤座席グリッド用（OPかつ夜勤でない。教官・OJTで座席側に
+  //                     回る役席・GLもここに含める）
+  //   leaderRows      … 早番・遅番エリア用（役席・GLかつ夜勤でない。教官・OJTで
+  //                     座席側に回る人は除く）
   //   nightOpRows     … 夜勤座席グリッド用（OPかつ夜勤）
   //   nightLeaderRows … 夜勤の役席・GL（配置先はassignNightLeadersが決める:
   //                     1名は夜勤GL枠2行1列目、2人目は座席10、3人目以降は空席へ）
   // 夜勤＝開始時刻が22:00より遅い、または終了時刻が26:00より遅いスタッフ（csv.jsで判定済み）。
-  function splitDayRows(dayRows) {
+  //
+  // ojtIndexes（教官・OJT。ojt.csv未読み込みならnull）: 教官の通常の役割が
+  // 役席・GLの場合、その日出勤しているOJT対象者を担当しているならば、
+  // 早番・遅番エリアではなく座席グリッド側（opRows）に回す。実際の教官・OJTの
+  // 同席処理そのものはassignSeats内（algorithm.js）で行う。夜勤は対象外
+  // （夜勤のOJTは既存の固定席運用で対応するため、ここでは分岐を作らない）。
+  function splitDayRows(dayRows, ojtIndexes) {
     const opRows = [];
     const leaderRows = [];
     const nightOpRows = [];
     const nightLeaderRows = [];
+    const presentNames = new Set(dayRows.map(r => r.name));
+    const isMentorWithPresentTrainee = (name) => {
+      if (!ojtIndexes || !ojtIndexes.traineesOf.has(name)) return false;
+      return ojtIndexes.traineesOf.get(name).some(t => presentNames.has(t));
+    };
     dayRows.forEach(r => {
       const base = {
         name: r.name, start: r.start, end: r.end, startMin: r.startMin, endMin: r.endMin,
@@ -289,6 +326,8 @@
         }
       } else if (r.role === 'OP') {
         opRows.push(base);
+      } else if (isMentorWithPresentTrainee(r.name)) {
+        opRows.push({ ...base, role: r.role });
       } else {
         leaderRows.push({ ...base, role: r.role, isLate: r.lateShift });
       }
@@ -298,8 +337,8 @@
 
   // ---------- 自動配置の実行 ----------
   document.getElementById('btn-run').addEventListener('click', () => {
-    if (!rawText.shift || !rawText.rookie || !rawText.secret) {
-      alert('月間シフトCSV / rookie.csv / secret.csv をすべて選択してください。');
+    if (!rawText.shift) {
+      alert('月間シフトCSVを選択してください。');
       return;
     }
     if (!shiftMonthly || shiftMonthly.dates.length === 0) {
@@ -312,25 +351,40 @@
       return;
     }
 
-    const rookieParsed = parseRookieRows(rawText.rookie);
-    const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
+    // rookie.csv / secret.csv / ojt.csv はいずれも必須ではない。未読み込みの場合は
+    // 該当する処理（新人固定席・固定席や禁止席・隣接禁止のチェック・教官とOJT・要サポート）を
+    // 丸ごとスキップし、通常配置のみを行う
+    const rookieParsed = rawText.rookie ? parseRookieRows(rawText.rookie) : { rows: [], logs: [] };
+    const secretParsed = rawText.secret
+      ? parseSecretRows(rawText.secret, seatByNumber)
+      : { rows: [], logs: [], duplicateDesignatedNames: [], duplicateForbiddenNames: [], duplicateSupportNames: [] };
+    const ojtParsed = rawText.ojt
+      ? parseOjtRows(rawText.ojt, seatByNumber)
+      : { rows: [], logs: [], duplicateMentorNames: [], duplicateTraineeNames: [] };
+    const ojtIndexes = buildOjtIndexes(ojtParsed.rows);
     const dayRows = rowsForDate(shiftMonthly.rows, selectedDate);
-    const { opRows, leaderRows, nightOpRows, nightLeaderRows } = splitDayRows(dayRows);
+    const { opRows, leaderRows, nightOpRows, nightLeaderRows } = splitDayRows(dayRows, ojtIndexes);
 
-    const allLogs = [...shiftMonthly.logs, ...rookieParsed.logs, ...secretParsed.logs];
+    const allLogs = [...shiftMonthly.logs, ...rookieParsed.logs, ...secretParsed.logs, ...ojtParsed.logs];
+    if (!rawText.rookie) allLogs.push({ level: 'info', message: 'rookie.csvが読み込まれていないため、新人固定席は使用せず配置しました。' });
+    if (!rawText.secret) allLogs.push({ level: 'info', message: 'secret.csvが読み込まれていないため、固定席・禁止席・隣接禁止・要サポート・優先フラグのルールは使用せず配置しました。' });
 
-    // 席固定・禁止席で同じ人が複数行に分かれている場合は、配置を実行せずに知らせる
+    // 固定席・禁止席・要サポートで同じ人が複数行に分かれている場合や、ojt.csvで教官の重複・
+    // OJT対象者の担当教官重複がある場合は、配置を実行せずに知らせる
     // （複数の座席は1行にまとめてスペース区切りで指定する仕様のため）
     const secretDuplicateMessage = (kind, name) =>
       `secret.csv: 「${name}」さんが「${kind}」に複数行あります。1人1行にまとめ、複数の座席は半角または全角スペース区切りで指定してください。`;
     const dupMessages = [
-      ...(secretParsed.duplicateDesignatedNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('席固定', name) })),
+      ...(secretParsed.duplicateDesignatedNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('固定席', name) })),
       ...(secretParsed.duplicateForbiddenNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('禁止席', name) })),
+      ...(secretParsed.duplicateSupportNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('要サポート', name) })),
+      ...(ojtParsed.duplicateMentorNames || []).map(name => ({ level: 'error', message: `ojt.csv: 教官「${name}」が複数行に記載されています。1名につき1行にまとめてください。` })),
+      ...(ojtParsed.duplicateTraineeNames || []).map(name => ({ level: 'error', message: `ojt.csv: OJT対象者「${name}」が複数の教官に紐づいています。1名の担当教官に統一してください。` })),
     ];
     if (dupMessages.length > 0) {
       renderMessages([...allLogs, ...dupMessages]);
       scrollToMessages();
-      return; // secret.csv を修正してもらうため、配置は実行しない
+      return; // CSVを修正してもらうため、配置は実行しない
     }
 
     if (hasRunOnce) {
@@ -339,17 +393,18 @@
     }
 
     // --- 日勤 ---
-    const seatResult = assignSeats(opRows, rookieParsed.rows, secretParsed.rows);
+    // 教官・OJT（固定席の次・新人固定席より前の優先順位）は assignSeats 内で処理する
+    const seatResult = assignSeats(opRows, rookieParsed.rows, secretParsed.rows, { ojtRows: ojtParsed.rows });
     const leaderResult = assignLeaderAreas(leaderRows);
 
     // --- 夜勤 ---
     // 1) 役席・GLの行き先を決める（1名はGL枠2行1列目。2人目は座席10、3人目以降は空席へ。
-    //    GL枠の優先候補は secret.csv の 席固定「夜勤GL席」から取得する）
+    //    GL枠の優先候補は secret.csv の 固定席「夜勤GL席」から取得する）
     const secretIndexes = buildSecretIndexes(secretParsed.rows);
     const nightLeaderResult = assignNightLeaders(nightLeaderRows, secretIndexes.nightGLDesignatedNames);
     // 2) 座席側に回るリーダー（2人目以降）をOPと合流させる。2人目には座席10の
-    //    席固定ルールをこの配置限定で追加する（secret.csv自体は変更しない）。
-    //    silent:true を付けることで、座席への強制配置は行いつつ「席固定」
+    //    固定席ルールをこの配置限定で追加する（secret.csv自体は変更しない）。
+    //    silent:true を付けることで、座席への強制配置は行いつつ「固定席」
     //    バッジは表示しない（secret.csvに入力された指定ではないため）
     const nightSeatRows = [...nightOpRows, ...nightLeaderResult.seatLeaders];
     let nightSecretRows = secretParsed.rows;
@@ -358,10 +413,12 @@
       nightSecretRows = [...secretParsed.rows,
         { type: 'seat_designated', name: nightLeaderResult.seat10Name, row: seat10.row, col: seat10.col, silent: true }];
     }
-    // 3) 席固定（座席10のリーダー含む）＞ 新人固定席 ＞ 時刻順 で配置。
-    //    nightContext:true により、同列隣接をソフトに回避する（席固定で結果的に
-    //    隣接するのは許容）。座席側に回った「夜勤GL席」指定者にはバッジが付く
-    const nightResult = assignSeats(nightSeatRows, rookieParsed.rows, nightSecretRows, { nightContext: true });
+    // 3) 固定席（座席10のリーダー含む）＞ 教官・OJT ＞ 新人固定席 ＞ 時刻順 で配置。
+    //    nightContext:true により、同列隣接をソフトに回避する（固定席で結果的に
+    //    隣接するのは許容）。座席側に回った「夜勤GL席」指定者にはバッジが付く。
+    //    夜勤は教官・OJTの役席・GL振り替え（splitDayRows側の分岐）は行わないが、
+    //    OP同士の教官・OJTペア自体はここでも同じロジックが動く（実害はない前提）
+    const nightResult = assignSeats(nightSeatRows, rookieParsed.rows, nightSecretRows, { nightContext: true, ojtRows: ojtParsed.rows });
 
     // どちらの配置に関するメッセージか分かるように接頭辞を付ける
     const prefixLogs = (logs, prefix) => logs.map(l => ({ ...l, message: `${prefix}${l.message}` }));
@@ -381,6 +438,8 @@
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
     appState.secretRows = secretParsed.rows;
+    appState.ojtRows = ojtParsed.rows;
+    appState.ojtIndexes = ojtIndexes;
     appState.currentDateLabel = formatDateLabel(selectedDate);
     appState.currentDate = selectedDate;
     hasRunOnce = true;
@@ -405,13 +464,18 @@
     return false;
   }
 
-  // 氏名を手入力で変更したとき、secret.csvのルール（席固定・禁止席・隣接禁止）を
+  // 氏名を手入力で変更したとき、secret.csvのルール（固定席・禁止席・隣接禁止・要サポート）を
   // 新しい氏名で判定し直してバッジ用の情報を作る（新人バッジは対象外。自動配置時の
   // 優先度に基づくもので、手入力の変更で再判定する性質のものではないため）。
   function deriveBadgeFields(name) {
     const idx = appState.ruleIndexes;
     if (!idx) {
-      return { hasAdjacentRule: false, hasForbiddenSeatRule: false, isDesignated: false, designatedSeatNumbers: [], forbiddenSeatNumbers: [], adjacentGroupLetter: null };
+      return {
+        hasAdjacentRule: false, hasForbiddenSeatRule: false, isDesignated: false,
+        designatedSeatNumbers: [], forbiddenSeatNumbers: [], adjacentGroupLetter: null,
+        isSupport: false, supportSeatNumbers: [],
+        ...deriveOjtBadgeFields(name),
+      };
     }
     const letters = appState.adjacentGroupLetters;
     return {
@@ -421,6 +485,22 @@
       designatedSeatNumbers: (idx.designatedSeatsMap.get(name) || []).map(numberOfKey),
       forbiddenSeatNumbers: (idx.forbiddenSeatsMap.get(name) || []).map(numberOfKey),
       adjacentGroupLetter: (letters && letters.get(name)) || null,
+      isSupport: idx.supportNames.has(name),
+      supportSeatNumbers: (idx.supportSeatsMap.get(name) || []).map(numberOfKey),
+      ...deriveOjtBadgeFields(name),
+    };
+  }
+
+  // ojt.csv（教官・OJT）由来のバッジ情報を、現在のappState.ojtIndexesから作る。
+  // ojt.csvが未読み込みの場合はすべてfalse/nullになる。
+  function deriveOjtBadgeFields(name) {
+    const idx = appState.ojtIndexes;
+    if (!idx) return { isOjtMentor: false, isOjtTrainee: false, ojtMentorName: null, ojtTraineeNames: [] };
+    return {
+      isOjtMentor: idx.isMentor.has(name),
+      isOjtTrainee: idx.isTrainee.has(name),
+      ojtMentorName: idx.mentorOf.get(name) || null,
+      ojtTraineeNames: idx.traineesOf.get(name) || [],
     };
   }
 
@@ -554,7 +634,11 @@
     }
     if (person.isDesignated) {
       const label = seatNumbersLabel(person.designatedSeatNumbers, '・');
-      badges.appendChild(makeBadge('designated', '席固定', label));
+      badges.appendChild(makeBadge('designated', '固定席', label));
+    }
+    if (person.isSupport) {
+      const label = seatNumbersLabel(person.supportSeatNumbers, '・');
+      badges.appendChild(makeBadge('support', '要サポ', label));
     }
     if (person.hasForbiddenSeatRule) {
       const label = seatNumbersLabel(person.forbiddenSeatNumbers, ',');
@@ -565,6 +649,12 @@
     }
     if (person.hasNightGLDesignation) {
       badges.appendChild(makeBadge('designated', '夜勤', 'GL席'));
+    }
+    if (person.isOjtMentor) {
+      badges.appendChild(makeBadge('mentor', '教官'));
+    }
+    if (person.isOjtTrainee) {
+      badges.appendChild(makeBadge('mentor', 'OJT'));
     }
     card.appendChild(badges);
 
@@ -902,12 +992,22 @@
   // さらに全エリア（座席・早番/遅番・夜勤GL枠・予備枠・あふれ）を対象に
   // 日勤・夜勤の入れ違い（夜勤の人が日勤側にいる等）を検出する。
   function checkPlacementViolations() {
-    if (!appState.ruleIndexes) {
-      alert('配置違反チェックを行うには secret.csv の情報が必要です。「自動配置を実行」するか、secret.csv を読み込んでください。');
-      return;
-    }
-    const { forbiddenPairSet, forbiddenSeatSet, designatedSeatsMap } = appState.ruleIndexes;
+    // secret.csvが未読み込みの場合、固定席・禁止席・隣接禁止のチェックはできないが、
+    // それ以外のチェック（同席の時間重複、日勤・夜勤の入れ違い、夜勤GL枠等）は
+    // secret.csvに依存しないため、そちらは引き続き実行する
+    const idx = appState.ruleIndexes;
+    const forbiddenPairSet = idx ? idx.forbiddenPairSet : new Set();
+    const forbiddenSeatSet = idx ? idx.forbiddenSeatSet : new Set();
+    const designatedSeatsMap = idx ? idx.designatedSeatsMap : new Map();
+    const supportSeatsMap = idx ? idx.supportSeatsMap : new Map();
     const violations = [];
+    // 日勤・夜勤の入れ違い等の「warn」用ログ（教官・OJTがらみの同席メッセージも
+    // ここに合流させるため、下の入れ違いチェックより前で宣言しておく）
+    const crossShiftWarnings = [];
+    if (!idx || !rawText.secret) {
+      crossShiftWarnings.push('secret.csvが読み込まれていないため、固定席・禁止席・隣接禁止のチェックは行っていません。');
+    }
+    const ojtIdx = appState.ojtIndexes; // ojt.csv未読み込みならnull
 
     const grids = [
       { label: '【日勤】', seats: appState.seats },
@@ -926,9 +1026,23 @@
           }
         });
 
-        // 同席2名までのうち、勤務時間が重なっていないか
+        // 同席2名のうち、勤務時間が重なっていないか。
+        // ・ojt.csvで紐づく教官・OJT本人同士の同席は、意図どおりのため違反にしない
+        // ・OJT対象者が絡む同席（担当教官が不在で臨時教官を割り当てた場合など、
+        //   ojt.csv上の組み合わせと一致しない場合）は、errorではなくwarnで
+        //   「OJTと臨時教官の組み合わせであれば問題ない」旨を添えて確認を促す
+        // ・OJTが絡まない同席は、これまでどおりerrorとして報告する
         if (occHere.length === 2 && overlaps(occHere[0], occHere[1])) {
-          violations.push(`${label}${numberOfKey(s.key)}番の座席で、勤務時間が重なる${occHere[0].name}さんと${occHere[1].name}さんが同席しています`);
+          const [a, b] = occHere;
+          const isRecognizedOjtPair = !!ojtIdx && (ojtIdx.mentorOf.get(a.name) === b.name || ojtIdx.mentorOf.get(b.name) === a.name);
+          const involvesOjtTrainee = !!ojtIdx && (ojtIdx.isTrainee.has(a.name) || ojtIdx.isTrainee.has(b.name));
+          if (isRecognizedOjtPair) {
+            // 教官・OJTとして正しく紐づいている組み合わせのため、違反としては扱わない
+          } else if (involvesOjtTrainee) {
+            crossShiftWarnings.push(`${label}${numberOfKey(s.key)}番の座席で、勤務時間が重なる${a.name}さんと${b.name}さんが同席しています（OJTと臨時教官の組み合わせであれば問題ありません。意図した配置か確認してください）`);
+          } else {
+            violations.push(`${label}${numberOfKey(s.key)}番の座席で、勤務時間が重なる${a.name}さんと${b.name}さんが同席しています`);
+          }
         }
 
         // ルール1: 隣接禁止（同じペアを2回報告しないようにする）
@@ -947,30 +1061,34 @@
       }
     }
 
-    // ルール3: 席固定が守られているか（その日出勤している対象者のみチェック。
-    // 日勤・夜勤どちらの座席グリッドでも、指定された座席番号に座っていればよい）
-    for (const [name, seatKeys] of designatedSeatsMap.entries()) {
-      const seatedAtList = [];
-      for (const { label, seats } of grids) {
-        const seatedAt = SEATS.find(s => seats[s.key].filter(Boolean).some(p => p.name === name));
-        if (seatedAt) seatedAtList.push({ label, key: seatedAt.key });
-      }
-      const isInOverflow = appState.overflow.some(p => p && p.name === name)
-        || appState.nightOverflow.some(p => p && p.name === name);
-      if (seatedAtList.length === 0 && !isInOverflow) continue; // その日出勤していない
+    // ルール3: 固定席・要サポートが守られているか（その日出勤している対象者のみ
+    // チェック。日勤・夜勤どちらの座席グリッドでも、指定された座席番号に座っていればよい）
+    const checkSeatCompliance = (seatsMap, label) => {
+      for (const [name, seatKeys] of seatsMap.entries()) {
+        const seatedAtList = [];
+        for (const { label: gridLabel, seats } of grids) {
+          const seatedAt = SEATS.find(s => seats[s.key].filter(Boolean).some(p => p.name === name));
+          if (seatedAt) seatedAtList.push({ label: gridLabel, key: seatedAt.key });
+        }
+        const isInOverflow = appState.overflow.some(p => p && p.name === name)
+          || appState.nightOverflow.some(p => p && p.name === name);
+        if (seatedAtList.length === 0 && !isInOverflow) continue; // その日出勤していない
 
-      const badPlacement = seatedAtList.length === 0 || seatedAtList.some(o => !seatKeys.includes(o.key));
-      if (badPlacement) {
-        const seatList = seatKeys.map(k => `${numberOfKey(k)}番`).join(' または ');
-        violations.push(`${name}さんが指定された座席（${seatList}）に配置されていません`);
+        const badPlacement = seatedAtList.length === 0 || seatedAtList.some(o => !seatKeys.includes(o.key));
+        if (badPlacement) {
+          const seatList = seatKeys.map(k => `${numberOfKey(k)}番`).join(' または ');
+          violations.push(`${name}さんが${label}で指定された座席（${seatList}）に配置されていません`);
+        }
       }
-    }
+    };
+    checkSeatCompliance(designatedSeatsMap, '固定席');
+    checkSeatCompliance(supportSeatsMap, '要サポート');
 
     // ---- 日勤・夜勤の入れ違いチェック ----
     // 勤務時間から夜勤かどうか（開始が22:00より遅い、または終了が26:00より遅い）を
     // 判定し直し、日勤側に夜勤の人・夜勤側に日勤の人が配置されていれば知らせる。
     // 手動でのドラッグ移動や時刻の手入力修正で入れ違いになったケースを検出する。
-    const crossShiftWarnings = [];
+    // （crossShiftWarnings 自体は関数冒頭、教官・OJTの同席チェックより前で宣言済み）
     const collectPeople = (locations) => {
       const result = [];
       locations.forEach(({ area, state, list }) => {
@@ -1037,7 +1155,7 @@
   // ファイル選択のいずれも読み書き権限の確認ダイアログを必要としない一般的な
   // ブラウザ操作のため、余計な権限確認は発生しない。
   //
-  // 保存ファイルには secret.csv から推測できる情報（席固定・禁止席・隣接禁止・
+  // 保存ファイルには secret.csv から推測できる情報（固定席・禁止席・隣接禁止・
   // 夜勤GL席の対象かどうか、対象座席番号、グループ記号などのバッジ情報）を
   // 一切含めない。バッジは読み込み時に、その時点でブラウザに読み込まれている
   // secret.csv から再計算して付け直す（reapplyBadges）。
@@ -1050,7 +1168,7 @@
   // 1人分のうち、保存してよい最小限の項目だけを書き出す（ホワイトリスト方式）。
   // secret.csv由来のバッジ情報（isDesignated / designatedSeatNumbers /
   // forbiddenSeatNumbers / hasAdjacentRule / hasForbiddenSeatRule /
-  // adjacentGroupLetter / hasNightGLDesignation）は、保存ファイルから席固定・
+  // adjacentGroupLetter / hasNightGLDesignation）は、保存ファイルから固定席・
   // 禁止席などの内容を推測できてしまうため、ここで確実に落とす。
   function exportPerson(p) {
     if (!p) return null;
@@ -1230,6 +1348,8 @@
         hasNightGLDesignation: isNightSide && nightGLNames.has(p.name),
       };
     };
+    // ※ deriveBadgeFields は内部で deriveOjtBadgeFields も呼ぶため、
+    // ojt.csv由来のisOjtMentor/isOjtTrainee等もここで一緒に再計算される
     for (const s of SEATS) {
       for (let i = 0; i < 2; i++) {
         appState.seats[s.key][i] = apply(appState.seats[s.key][i], false);
@@ -1283,7 +1403,19 @@
       appState.secretRows = null;
       appState.ruleIndexes = null;
       appState.adjacentGroupLetters = null;
-      secretNote = { level: 'warn', message: 'secret.csvが読み込まれていないため、禁止席・隣接禁止・席固定の違反チェックとバッジ表示は使用できません。secret.csvを読み込むと自動的に有効になります。' };
+      secretNote = { level: 'warn', message: 'secret.csvが読み込まれていないため、禁止席・隣接禁止・固定席の違反チェックとバッジ表示は使用できません。secret.csvを読み込むと自動的に有効になります。' };
+    }
+    // ojt.csv由来の情報（教官・OJTのバッジ、違反チェックでの同席の例外扱い）も
+    // 保存ファイルには含まれていないため、同様にその場のojt.csvから作り直す
+    let ojtNote = null;
+    if (rawText.ojt) {
+      const ojtParsed = parseOjtRows(rawText.ojt, seatByNumber);
+      appState.ojtRows = ojtParsed.rows;
+      appState.ojtIndexes = buildOjtIndexes(ojtParsed.rows);
+      ojtNote = { level: 'info', message: '読み込み済みのojt.csvから、教官・OJTのバッジ表示を構築しました。' };
+    } else {
+      appState.ojtRows = null;
+      appState.ojtIndexes = null;
     }
     reapplyBadges();
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
@@ -1295,6 +1427,7 @@
       level: 'info',
       message: `保存した配置を読み込みました（対象日: ${appState.currentDateLabel || '不明'} ／ 保存日時: ${typeof data.savedAt === 'string' ? data.savedAt : '不明'}）。`,
     }, secretNote];
+    if (ojtNote) logs.push(ojtNote);
     if (brokenNames.length > 0) {
       logs.push({
         level: 'warn',

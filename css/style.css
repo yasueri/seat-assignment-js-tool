@@ -12,6 +12,10 @@
     --lock-bg:#FBF3DE;
     --overflow:#C0392B;
     --overflow-bg:#FBEAE8;
+    --mentor:#6B46C1;
+    --mentor-bg:#F1EAFB;
+    --support:#0E7C86;
+    --support-bg:#E3F4F5;
     --empty-border:#C7CEDA;
     --ot-bg:#FFF3B0;
     --ot-mark:#8A6D00;
@@ -513,6 +517,8 @@
   .badge.rookie{ background:var(--rookie-bg); color:var(--rookie); }
   .badge.designated{ background:#E6F0FB; color:var(--accent-dark); }
   .badge.lock{ background:var(--lock-bg); color:var(--lock); }
+  .badge.mentor{ background:var(--mentor-bg); color:var(--mentor); }
+  .badge.support{ background:var(--support-bg); color:var(--support); }
 
   .edit-toggle{
     flex-shrink:0;
