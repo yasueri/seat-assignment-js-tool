@@ -337,6 +337,11 @@
 
   // ---------- 自動配置の実行 ----------
   document.getElementById('btn-run').addEventListener('click', () => {
+    const runTimingEl = document.getElementById('run-timing');
+    // 入力エラー等で途中return する場合に古い実行時間が表示され続けないよう、
+    // まずクリアしておく（結果が出たときだけ改めて表示する）
+    if (runTimingEl) runTimingEl.textContent = '';
+
     if (!rawText.shift) {
       alert('月間シフトCSVを選択してください。');
       return;
@@ -391,6 +396,10 @@
       const ok = confirm('手動で調整した内容は失われます。自動配置をやり直しますか？');
       if (!ok) return;
     }
+
+    // ボタン押下から結果表示までの実行時間計測（ボタン右側に薄く表示する）。
+    // window.confirm の応答待ちなど、ユーザー操作待ちの時間は含めない。
+    const runStartedAt = performance.now();
 
     // --- 日勤 ---
     // 教官・OJT（固定席の次・新人固定席より前の優先順位）は assignSeats 内で処理する
@@ -448,6 +457,11 @@
     renderMessages(allLogs);
     render();
     scrollToMessages();
+
+    if (runTimingEl) {
+      const elapsedMs = Math.round(performance.now() - runStartedAt);
+      runTimingEl.textContent = `計算時間：${elapsedMs}ms`;
+    }
 
     // 個別ダイアログが必要なログのみ alert 表示
     allLogs.filter(l => l.showDialog).forEach(l => alert(l.message));

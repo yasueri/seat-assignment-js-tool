@@ -325,9 +325,11 @@ window.SeatTool.csv = (function () {
   // ---------- ojt.csv ----------
   // 列: 教官名, OJT一人目, OJT二人目, 対象座席
   // 教官1名につき1行。OJT二人目は空欄でよい（その日の担当が1名のみの場合）。
+  // OJT一人目を空欄にしてOJT二人目のみ入力した場合も、その1名を教官と同席させる
+  // 対象者として扱う（OJT一人目の位置に繰り上げて処理する。両方空欄の行のみ読み飛ばす）。
   // 対象座席は「単独配置（教官とOJT一人目のみが同席する場合）」の候補座席を
-  // 優先順で指定する。空欄なら既定順（15→12→8→他）。座席番号を書くとその座席が
-  // 先頭に来て、残りは既定順のまま続く（例:「12」→12→15→8→他、
+  // 優先順で指定する。空欄なら既定順（15→12→8→4→他）。座席番号を書くとその座席が
+  // 先頭に来て、残りは既定順のまま続く（例:「12」→12→15→8→4→他、
   // 「12 4」→12→4→15→8→他）。半角・全角スペースどちらでも区切りとして使える。
   // OJT二人目がいる場合のペア席探索順は、この対象座席から算出する「単独時の順で
   // 12と15のどちらが先に来るか」によって決まる（詳しい組み合わせはalgorithm.js側の
@@ -347,21 +349,21 @@ window.SeatTool.csv = (function () {
     dataRows.forEach((r, i) => {
       const rowLabel = `ojt.csv ${i + 2}行目`;
       const mentorName = cell(r, 0);
-      const ojt1 = cell(r, 1);
-      const ojt2 = cell(r, 2);
+      const ojt1Raw = cell(r, 1);
+      const ojt2Raw = cell(r, 2);
       const seatCell = cell(r, 3);
-      if (!mentorName && !ojt1 && !ojt2 && !seatCell) return; // 完全な空行
+      if (!mentorName && !ojt1Raw && !ojt2Raw && !seatCell) return; // 完全な空行
 
       if (!mentorName) {
         logs.push({ level: 'warn', message: `${rowLabel}: 教官名が空欄のため読み飛ばしました` });
         return;
       }
-      if (!ojt1) {
-        logs.push({ level: 'warn', message: `${rowLabel}: OJT一人目が空欄のため読み飛ばしました（${mentorName}）` });
+      if (!ojt1Raw && !ojt2Raw) {
+        logs.push({ level: 'warn', message: `${rowLabel}: OJT対象者が入力されていないため読み飛ばしました（${mentorName}）` });
         return;
       }
-      if (ojt2 && ojt2 === ojt1) {
-        logs.push({ level: 'warn', message: `${rowLabel}: OJT一人目とOJT二人目に同じ氏名（${ojt1}）が指定されています。読み飛ばしました` });
+      if (ojt2Raw && ojt2Raw === ojt1Raw) {
+        logs.push({ level: 'warn', message: `${rowLabel}: OJT一人目とOJT二人目に同じ氏名（${ojt1Raw}）が指定されています。読み飛ばしました` });
         return;
       }
       if (seenMentors.has(mentorName)) {
@@ -370,6 +372,16 @@ window.SeatTool.csv = (function () {
         return;
       }
       seenMentors.add(mentorName);
+
+      // OJT一人目が空欄でOJT二人目のみ入力されている場合も、教官とペア（同席）で
+      // 配置できるよう、OJT二人目をOJT一人目の位置に繰り上げて扱う
+      // （教官+OJT一人目の同席処理がそのまま使えるようにするため）。
+      let ojt1 = ojt1Raw;
+      let ojt2 = ojt2Raw;
+      if (!ojt1 && ojt2) {
+        ojt1 = ojt2Raw;
+        ojt2 = '';
+      }
 
       const trainees = [ojt1, ojt2].filter(Boolean);
       trainees.forEach(name => {
