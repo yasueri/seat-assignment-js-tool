@@ -55,6 +55,7 @@
 
   <div class="actions">
     <button id="btn-run" disabled>自動配置を実行</button>
+    <span class="calc-time" id="calc-time"></span>
   </div>
 
   <details class="help">
@@ -162,10 +163,16 @@
       3. 固定席（secret.csv）… 候補座席の数が少ない人ほど先に配置（同数なら出勤時刻順）。複数候補がある場合は入力順を優先。<br>
       4. 教官・OJT（ojt.csv）… 教官とOJT一人目を同席させ、OJT二人目がいれば近くの座席を別途確保。<br>
       5. 要サポート（secret.csv）… 固定席と同じ並び順ルール。<br>
-      6. secret.csv記載スタッフ（隣接禁止・禁止席の対象者）… 出勤時刻が早い順。<br>
+      6. secret.csv記載スタッフ（隣接禁止・禁止席の対象者）… 全探索（枝刈り付きbacktrack）で、全員を配置できる組み合わせを実際にすべて探し、その中から一番良さそうな案を採用します（詳しくは下記）。<br>
       7. その他スタッフ … 出勤時刻が早い順。<br>
       ここまでの各段階で、すでに配置済みの人は後の段階では処理されません。指定席に配置できなかった場合は、その場でメッセージを表示したうえで通常の空席探索にフォールバックします。<br>
       なお夜勤に限り、座席探索の際は同列で隣接する座席を（他に選べる候補がある限り）避けます。
+    </p>
+    <p>
+      <strong>secret.csv記載スタッフの配置（全探索backtrack）について</strong><br>
+      6.のステップ（隣接禁止・禁止席の対象者）だけは、貪欲な当てはめではなく全探索で行います。1人ずつ「今置ける座席が一番少ない人」から座席を試し、途中で他の誰かが置けなくなった時点でその組み合わせを打ち切って別の組み合わせを試す、という探索を尽くします。これにより「本当は解けるのに、たまたま見つからずあふれてしまう」ことを防ぎます。<br>
+      見つかった組み合わせのうち一番良さそうな案（座席の埋まり方の偏りが少なく、勤務時間がぴったり接する同席が少ないもの）を自動的に採用します。「3. 日勤 座席配置」「4. 夜勤 座席配置」の遅番枠・夜勤GL枠の右にある「次の案」ボタンで、他に見つかった組み合わせに順番に切り替えられます（secret.csv対象者以外の座席は変わりません）。「その他の座席をシャッフル」ボタンでは、secret.csv対象者側の配置はそのままに、それ以外のスタッフの座席だけをランダムに振り直せます。どちらのボタンも、押すたびに今の座席表を置き換えます（手動で調整した内容は失われます）。<br>
+      全員を配置できる組み合わせが1件も見つからなかった場合（secret.csvの条件同士が矛盾している等）や、制限時間内に探索が終わらなかった場合は、従来どおりの配置方法（出勤時刻順への当てはめ）にフォールバックし、メッセージ欄で知らせます。
     </p>
     </div>
   </details>
@@ -224,6 +231,16 @@
       <h3>遅番</h3>
       <div class="leader-grid" id="late-grid"></div>
     </div>
+    <div class="candidate-panel">
+      <div class="candidate-panel-inner" id="day-candidate-inner" hidden>
+        <div class="candidate-count" id="day-candidate-count">候補 -/-</div>
+        <div class="candidate-buttons">
+          <button type="button" class="candidate-btn multiline-btn" id="day-btn-next-pattern"><span>次の案</span><span class="candidate-btn-sub">（配慮対象者の座席）</span></button>
+          <button type="button" class="candidate-btn multiline-btn secondary" id="day-btn-shuffle-others"><span>その他の座席を</span><span>シャッフル</span></button>
+        </div>
+        <div class="candidate-diff" id="day-candidate-diff"></div>
+      </div>
+    </div>
   </div>
 
   <div class="layout">
@@ -274,6 +291,16 @@
     <div class="leader-area">
       <h3>夜勤GL</h3>
       <div class="leader-grid" id="night-gl-grid"></div>
+    </div>
+    <div class="candidate-panel">
+      <div class="candidate-panel-inner" id="night-candidate-inner" hidden>
+        <div class="candidate-count" id="night-candidate-count">候補 -/-</div>
+        <div class="candidate-buttons">
+          <button type="button" class="candidate-btn multiline-btn" id="night-btn-next-pattern"><span>次の案</span><span class="candidate-btn-sub">（配慮対象者の座席）</span></button>
+          <button type="button" class="candidate-btn multiline-btn secondary" id="night-btn-shuffle-others"><span>その他の座席を</span><span>シャッフル</span></button>
+        </div>
+        <div class="candidate-diff" id="night-candidate-diff"></div>
+      </div>
     </div>
   </div>
 
@@ -329,6 +356,7 @@
 
 <script src="js/csv.js"></script>
 <script src="js/algorithm.js"></script>
+<script src="js/algorithmExhaustive.js"></script>
 <script src="js/ui.js"></script>
 </body>
 </html>

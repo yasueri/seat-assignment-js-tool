@@ -185,9 +185,14 @@
   }
   .actions{
     display:flex;
+    align-items:center;
     gap:12px;
     margin-top:16px;
     flex-wrap:wrap;
+  }
+  .calc-time{
+    font-size:15px;
+    color:var(--text-muted);
   }
   button{
     font-family:var(--font-ui);
@@ -644,4 +649,62 @@
     font-size:14px;
     color:var(--text-muted);
     margin-top:12px;
+  }
+
+  /* ■2（全探索backtrack）候補パネル（「次の案」「その他だけシャッフル」ボタン。ver4.8で追加） */
+  .candidate-panel{
+    width:190px;
+    flex:none;
+    display:flex;
+  }
+  .candidate-panel-inner{
+    width:100%;
+    background:#E3F2FD;
+    border:1px solid #BFDDF5;
+    border-radius:9px;
+    padding:9px 10px;
+    display:flex;
+    flex-direction:column;
+    gap:7px;
+  }
+  .candidate-count{
+    font-size:13px;
+    font-weight:600;
+    color:var(--text-muted);
+    font-family:var(--font-mono);
+  }
+  .candidate-buttons{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  button.candidate-btn{
+    font-size:13.5px;
+    padding:7px 8px;
+    gap:1px;
+  }
+  .candidate-btn-sub{
+    font-weight:400;
+    opacity:.85;
+  }
+  .candidate-btn:disabled{
+    opacity:.4;
+    cursor:not-allowed;
+  }
+  .candidate-diff{
+    font-size:12px;
+    color:var(--accent-dark);
+    min-height:1.3em;
+    line-height:1.3;
+  }
+
+  /* ■2の「次の案」「その他だけシャッフル」ボタンで、直前の表示から座席が
+     変わった人のカードを一瞬光らせるハイライト（数秒かけて自然に消える） */
+  .person-card.candidate-changed{
+    animation: candidateChangedFade 2.4s ease forwards;
+  }
+  @keyframes candidateChangedFade{
+    0%{ box-shadow:0 0 0 2.5px var(--accent); }
+    70%{ box-shadow:0 0 0 2.5px var(--accent); }
+    100%{ box-shadow:0 0 0 0 rgba(0,0,0,0); }
   }
