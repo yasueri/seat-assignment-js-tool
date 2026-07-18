@@ -15,10 +15,18 @@
     SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
     buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat, buildOjtIndexes,
+    assignSeatsExhaustive, reshuffleOthers,
   } = NS.algorithm;
 
   const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
   const LEADER_ROWS = [1, 2], LEADER_COLS = [1, 2, 3];
+
+  // ■2（全探索backtrack）を「自動配置を実行」の都度、日勤・夜勤それぞれで走らせる際の設定。
+  // secret.csv対象者（隣接禁止・禁止席）は通常少人数のはずで、実運用では一瞬で解が
+  // 出る想定のため、タイムアウトは短め（2秒）にしてある。解けた場合は「次の案」ボタンで
+  // 上位EXHAUSTIVE_MAX_SOLUTIONS件まで順番に見られる。
+  const EXHAUSTIVE_MAX_SOLUTIONS = 20;
+  const EXHAUSTIVE_TIME_BUDGET_MS = 2000;
 
   // ---------- 表示用ヘルパー ----------
   // 座席番号の配列を、1〜2件なら番号を、3件以上なら「複数有」を返す（バッジ表示用）
@@ -53,6 +61,10 @@
     // ojt.csvのパース結果とインデックス（教官・OJTのバッジ再計算・違反チェックに使用。
     // secret.csvと同様、保存ファイルには含めず、読み込み時にojt.csvから作り直す）
     ojtRows: null, ojtIndexes: null,
+    // ■2（全探索backtrack）の結果（ver4.8で追加）。「自動配置を実行」のたびに作り直す。
+    // { feasible, timedOut, totalSolutionsFound, solutions:[...], bestPartial, context, index }
+    // 保存データの読み込み時や、secret.csv対象者が0名などで解が1件しかない場合はnull。
+    dayExhaustive: null, nightExhaustive: null,
   };
   let dragSource = null;
   let hasRunOnce = false;
@@ -62,6 +74,7 @@
   // 何度も参照するDOM要素はここでまとめて取得しておく
   const els = {
     messages: document.getElementById('messages'),
+    calcTime: document.getElementById('calc-time'),
     seatGrid: document.getElementById('seat-grid'),
     overflowList: document.getElementById('overflow-list'),
     overflowAppend: document.getElementById('overflow-append'),
@@ -76,6 +89,23 @@
     nightSpareGrid: document.getElementById('night-spare-grid'),
     nightOverflowList: document.getElementById('night-overflow-list'),
     nightOverflowAppend: document.getElementById('night-overflow-append'),
+  };
+  // ■2（全探索backtrack）の「候補」パネル（日勤・夜勤それぞれ）
+  const candidateEls = {
+    day: {
+      inner: document.getElementById('day-candidate-inner'),
+      count: document.getElementById('day-candidate-count'),
+      diff: document.getElementById('day-candidate-diff'),
+      btnNext: document.getElementById('day-btn-next-pattern'),
+      btnShuffle: document.getElementById('day-btn-shuffle-others'),
+    },
+    night: {
+      inner: document.getElementById('night-candidate-inner'),
+      count: document.getElementById('night-candidate-count'),
+      diff: document.getElementById('night-candidate-diff'),
+      btnNext: document.getElementById('night-btn-next-pattern'),
+      btnShuffle: document.getElementById('night-btn-shuffle-others'),
+    },
   };
   // overflow-append は再描画のたびに作り直される要素ではないため、
   // ドロップ受付は最初に1回だけ登録する（毎回登録するとリスナーが積み重なってしまう）
@@ -141,6 +171,10 @@
     appState.secretRows = secretParsed.rows;
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
+    // ■2の候補は旧secret.csvの内容で計算済みのため、ここでは無効化する
+    // （「次の案」ボタンを押すと矛盾した内容になってしまうため）
+    appState.dayExhaustive = null;
+    appState.nightExhaustive = null;
     reapplyBadges();
     render();
     renderMessages([
@@ -336,6 +370,37 @@
   }
 
   // ---------- 自動配置の実行 ----------
+  // ■2（全探索backtrack）の結果から、従来の assignSeats と同じ形（{state, overflow, logs}）を
+  // 作る。解けた場合はスコア最上位の解を採用し、そうでない場合は greedyFallback()
+  // （＝従来の貪欲+MRV assignSeats）の結果を使う。どちらの場合も、状況を allLogs に積む。
+  // labelPrefix: '日勤' | '夜勤'（メッセージの見出し用）
+  function buildSeatResultFromExhaustive(exhaustiveResult, labelPrefix, greedyFallback, allLogs) {
+    if (exhaustiveResult.feasible && exhaustiveResult.solutions.length > 0) {
+      const best = exhaustiveResult.solutions[0];
+      const solutionWord = exhaustiveResult.totalSolutionsFound >= EXHAUSTIVE_MAX_SOLUTIONS
+        ? `${exhaustiveResult.totalSolutionsFound}通り以上`
+        : `${exhaustiveResult.totalSolutionsFound}通り`;
+      allLogs.push({
+        level: 'info',
+        message: `【${labelPrefix}】secret.csv対象者（隣接禁止・禁止席）について全探索を行い、実行可能な配置を${solutionWord}見つけました。最も良さそうな案を採用しています（「次の案」ボタンで他の案に切り替えられます）。`,
+      });
+      return { state: best.state, overflow: best.overflow, logs: best.logs };
+    }
+    // 解けなかった場合（証明つきで解なし、またはタイムアウト）は従来の貪欲+MRVにフォールバックする
+    if (exhaustiveResult.timedOut) {
+      allLogs.push({
+        level: 'warn',
+        message: `【${labelPrefix}】secret.csv対象者についての全探索が制限時間内に終わらなかったため、通常の配置方法（貪欲法）で配置しました。`,
+      });
+    } else if (exhaustiveResult.bestPartial) {
+      allLogs.push({
+        level: 'warn', showDialog: true,
+        message: `【${labelPrefix}】secret.csv対象者を全員配置できる組み合わせが見つかりませんでした（最も惜しい組み合わせでも配置できなかった対象者: ${exhaustiveResult.bestPartial.unplacedNames.join('、')}さん）。通常の配置方法で処理します。secret.csvの条件を確認してください。`,
+      });
+    }
+    return greedyFallback();
+  }
+
   document.getElementById('btn-run').addEventListener('click', () => {
     if (!rawText.shift) {
       alert('月間シフトCSVを選択してください。');
@@ -392,9 +457,26 @@
       if (!ok) return;
     }
 
+    // 計算時間の計測開始（実際の配置計算のみを対象とし、CSVパースやバリデーションは含めない）
+    const calcStartTime = performance.now();
+
     // --- 日勤 ---
-    // 教官・OJT（固定席の次・新人固定席より前の優先順位）は assignSeats 内で処理する
-    const seatResult = assignSeats(opRows, rookieParsed.rows, secretParsed.rows, { ojtRows: ojtParsed.rows });
+    // 教官・OJT（固定席の次・新人固定席より前の優先順位）は assignSeats / assignSeatsExhaustive 内で処理する。
+    // secret.csv対象者（隣接禁止・禁止席）の配置は、ver4.8からまず■2（全探索backtrack）で
+    // 解けるかどうかを試す。解けた場合はその最良解（スコア最上位）を採用し、解が
+    // 証明つきで存在しない場合・制限時間内に見つからなかった場合のみ、従来の
+    // 貪欲+MRV（assignSeats）にフォールバックする。
+    const dayExhaustiveResult = assignSeatsExhaustive(opRows, rookieParsed.rows, secretParsed.rows, {
+      ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS, timeBudgetMs: EXHAUSTIVE_TIME_BUDGET_MS,
+    });
+    const seatResult = buildSeatResultFromExhaustive(
+      dayExhaustiveResult, '日勤',
+      () => assignSeats(opRows, rookieParsed.rows, secretParsed.rows, { ojtRows: ojtParsed.rows }),
+      allLogs,
+    );
+    appState.dayExhaustive = (dayExhaustiveResult.feasible && dayExhaustiveResult.solutions.length > 0)
+      ? { ...dayExhaustiveResult, index: 0 }
+      : null;
     const leaderResult = assignLeaderAreas(leaderRows);
 
     // --- 夜勤 ---
@@ -417,8 +499,18 @@
     //    nightContext:true により、同列隣接をソフトに回避する（固定席で結果的に
     //    隣接するのは許容）。座席側に回った「夜勤GL席」指定者にはバッジが付く。
     //    夜勤は教官・OJTの役席・GL振り替え（splitDayRows側の分岐）は行わないが、
-    //    OP同士の教官・OJTペア自体はここでも同じロジックが動く（実害はない前提）
-    const nightResult = assignSeats(nightSeatRows, rookieParsed.rows, nightSecretRows, { nightContext: true, ojtRows: ojtParsed.rows });
+    //    OP同士の教官・OJTペア自体はここでも同じロジックが動く（実害はない前提）。
+    //    secret.csv対象者の配置は日勤と同様、まず■2（全探索backtrack）を試す。
+    const nightExhaustiveOptions = { nightContext: true, ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS, timeBudgetMs: EXHAUSTIVE_TIME_BUDGET_MS };
+    const nightExhaustiveResult = assignSeatsExhaustive(nightSeatRows, rookieParsed.rows, nightSecretRows, nightExhaustiveOptions);
+    const nightResult = buildSeatResultFromExhaustive(
+      nightExhaustiveResult, '夜勤',
+      () => assignSeats(nightSeatRows, rookieParsed.rows, nightSecretRows, { nightContext: true, ojtRows: ojtParsed.rows }),
+      allLogs,
+    );
+    appState.nightExhaustive = (nightExhaustiveResult.feasible && nightExhaustiveResult.solutions.length > 0)
+      ? { ...nightExhaustiveResult, index: 0 }
+      : null;
 
     // どちらの配置に関するメッセージか分かるように接頭辞を付ける
     const prefixLogs = (logs, prefix) => logs.map(l => ({ ...l, message: `${prefix}${l.message}` }));
@@ -444,6 +536,10 @@
     appState.currentDate = selectedDate;
     hasRunOnce = true;
     editingLoc = null;
+
+    // 計算時間の計測終了。「自動配置を実行」ボタンの右側に表示する。
+    const calcElapsedMs = Math.round(performance.now() - calcStartTime);
+    els.calcTime.textContent = `計算時間：${calcElapsedMs}ms`;
 
     renderMessages(allLogs);
     render();
@@ -595,9 +691,12 @@
     return span;
   }
 
-  function createPersonCard(loc, person) {
+  // highlighted=true のとき、■2の「次の案」「その他だけシャッフル」ボタンで
+  // このカードの人が直前の表示から座席を変えたことを示す、一瞬光るハイライトを付ける
+  // （CSS側のアニメーションで数秒かけて自然に消える。状態としては保持しない）。
+  function createPersonCard(loc, person, highlighted) {
     const card = document.createElement('div');
-    card.className = 'person-card' + (person.isRookie ? ' rookie' : '');
+    card.className = 'person-card' + (person.isRookie ? ' rookie' : '') + (highlighted ? ' candidate-changed' : '');
     card.draggable = true;
 
     const info = document.createElement('div');
@@ -868,13 +967,14 @@
     el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('dragover'); handleDrop(loc); });
   }
 
-  function createSlot(loc) {
+  function createSlot(loc, changedNames) {
     const slot = document.createElement('div');
     slot.className = 'slot';
     const person = getPersonAt(loc);
     if (person) {
       slot.classList.add('filled');
-      slot.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person));
+      const highlighted = !!(changedNames && changedNames.has(person.name));
+      slot.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person, highlighted));
     } else {
       slot.textContent = '空席';
     }
@@ -883,7 +983,9 @@
   }
 
   // 座席グリッド（全15席）を描画する。日勤（locType='seat'）と夜勤（locType='nightSeat'）で共用。
-  function renderSeatGrid(gridEl, locType) {
+  // changedNames が渡された場合、そこに含まれる氏名のカードにハイライトを付ける
+  // （■2の「次の案」「その他だけシャッフル」ボタンで直前と座席が変わった人を示す）。
+  function renderSeatGrid(gridEl, locType, changedNames) {
     const grid = gridEl;
     grid.innerHTML = '';
     for (let row = 1; row <= 4; row++) {
@@ -903,8 +1005,8 @@
         coord.textContent = numberOfSeat(row, col);
         seatDiv.appendChild(coord);
 
-        seatDiv.appendChild(createSlot({ type: locType, seatKey: key, slotIndex: 0 }));
-        seatDiv.appendChild(createSlot({ type: locType, seatKey: key, slotIndex: 1 }));
+        seatDiv.appendChild(createSlot({ type: locType, seatKey: key, slotIndex: 0 }, changedNames));
+        seatDiv.appendChild(createSlot({ type: locType, seatKey: key, slotIndex: 1 }, changedNames));
 
         grid.appendChild(seatDiv);
       }
@@ -941,7 +1043,7 @@
   }
 
   // あふれ欄を描画する。日勤（'overflow'）と夜勤（'nightOverflow'）で共用。
-  function renderOverflow(listEl, arr, locType) {
+  function renderOverflow(listEl, arr, locType, changedNames) {
     const list = listEl;
     list.innerHTML = '';
     if (arr.length === 0) {
@@ -954,7 +1056,8 @@
         const loc = { type: locType, index: i };
         const wrapper = document.createElement('div');
         wrapper.className = 'overflow-slot';
-        wrapper.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person));
+        const highlighted = !!(changedNames && changedNames.has(person.name));
+        wrapper.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person, highlighted));
         makeDropTarget(wrapper, loc);
         list.appendChild(wrapper);
       });
@@ -969,17 +1072,106 @@
     els.nightDateLabel.textContent = suffix;
   }
 
-  function render() {
+  // dayChangedNames / nightChangedNames（省略可、Set<string>）: ■2の「次の案」
+  // 「その他だけシャッフル」ボタンから呼ばれたときだけ渡される。渡された氏名の
+  // カードに一瞬ハイライトを付ける（ドラッグ操作や✎編集など、それ以外からの
+  // render()呼び出しでは何も渡さないため、ハイライトは付かない）。
+  function render(dayChangedNames, nightChangedNames) {
     renderDateHeadings();
     renderLeaderGrid(els.earlyGrid, 'early');
     renderLeaderGrid(els.lateGrid, 'late');
-    renderSeatGrid(els.seatGrid, 'seat');
-    renderOverflow(els.overflowList, appState.overflow, 'overflow');
+    renderSeatGrid(els.seatGrid, 'seat', dayChangedNames);
+    renderOverflow(els.overflowList, appState.overflow, 'overflow', dayChangedNames);
     renderLeaderGrid(els.nightSpareGrid, 'nightSpare');
     renderLeaderGrid(els.nightGlGrid, 'nightGL');
-    renderSeatGrid(els.nightSeatGrid, 'nightSeat');
-    renderOverflow(els.nightOverflowList, appState.nightOverflow, 'nightOverflow');
+    renderSeatGrid(els.nightSeatGrid, 'nightSeat', nightChangedNames);
+    renderOverflow(els.nightOverflowList, appState.nightOverflow, 'nightOverflow', nightChangedNames);
+    renderCandidatePanel('day', appState.dayExhaustive, dayChangedNames);
+    renderCandidatePanel('night', appState.nightExhaustive, nightChangedNames);
   }
+
+  // ---------- ■2（全探索backtrack）候補パネル（ver4.8で追加） ----------
+
+  // 座席表(state)から「氏名 -> 座席key」のMapを作る（差分検出用）
+  function collectSeatAssignments(state) {
+    const map = new Map();
+    for (const s of SEATS) {
+      state[s.key].forEach(p => { if (p) map.set(p.name, s.key); });
+    }
+    return map;
+  }
+
+  // 2つの座席表を比べて、座席が変わった（またはあふれに落ちた/あふれから復帰した）
+  // 人の氏名の集合を返す。■2の「次の案」「その他だけシャッフル」ボタンで、
+  // 直前の表示と比べて何が変わったかを示すために使う。
+  function diffChangedNames(prevState, nextState) {
+    const prev = collectSeatAssignments(prevState);
+    const next = collectSeatAssignments(nextState);
+    const changed = new Set();
+    for (const [name, seatKey] of next.entries()) {
+      if (prev.get(name) !== seatKey) changed.add(name);
+    }
+    for (const name of prev.keys()) {
+      if (!next.has(name)) changed.add(name);
+    }
+    return changed;
+  }
+
+  // 候補パネル（日勤 or 夜勤）の表示を更新する。exがnull（■2が解けなかった/
+  // まだ自動配置していない/保存データを読み込んだ直後）ならパネルごと隠す。
+  function renderCandidatePanel(prefix, ex, changedNames) {
+    const els2 = candidateEls[prefix];
+    if (!els2 || !els2.inner) return;
+    if (!ex || !ex.solutions || ex.solutions.length === 0) {
+      els2.inner.hidden = true;
+      return;
+    }
+    els2.inner.hidden = false;
+    els2.count.textContent = `候補 ${ex.index + 1} / ${ex.solutions.length}`;
+    els2.btnNext.disabled = ex.solutions.length <= 1;
+    if (changedNames && changedNames.size > 0) {
+      els2.diff.textContent = `変更: ${Array.from(changedNames).join('、')}さん`;
+    } else {
+      els2.diff.textContent = '';
+    }
+  }
+
+  // prefix: 'day' | 'night'。seatsKey/overflowKey: appState上のプロパティ名。
+  function setupCandidateButtons(prefix, getEx, seatsKey, overflowKey) {
+    const els2 = candidateEls[prefix];
+    if (!els2 || !els2.btnNext) return;
+
+    els2.btnNext.addEventListener('click', () => {
+      const ex = getEx();
+      if (!ex || ex.solutions.length <= 1) return;
+      const prevState = appState[seatsKey];
+      ex.index = (ex.index + 1) % ex.solutions.length;
+      const chosen = ex.solutions[ex.index];
+      appState[seatsKey] = chosen.state;
+      appState[overflowKey] = chosen.overflow;
+      editingLoc = null;
+      const changed = diffChangedNames(prevState, chosen.state);
+      if (prefix === 'day') render(changed, undefined);
+      else render(undefined, changed);
+    });
+
+    els2.btnShuffle.addEventListener('click', () => {
+      const ex = getEx();
+      if (!ex) return;
+      const base = ex.solutions[ex.index];
+      const prevState = appState[seatsKey];
+      const reshuffled = reshuffleOthers(base, ex.context);
+      appState[seatsKey] = reshuffled.state;
+      appState[overflowKey] = reshuffled.overflow;
+      editingLoc = null;
+      const changed = diffChangedNames(prevState, reshuffled.state);
+      if (prefix === 'day') render(changed, undefined);
+      else render(undefined, changed);
+    });
+  }
+  setupCandidateButtons('day', () => appState.dayExhaustive, 'seats', 'overflow');
+  setupCandidateButtons('night', () => appState.nightExhaustive, 'nightSeats', 'nightOverflow');
+
   render();
 
   // ドラッグがドロップ対象の外で終了した場合でも、ハイライトが残らないようにする
@@ -1420,6 +1612,11 @@
     reapplyBadges();
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
     appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
+    // 保存データには■2（全探索backtrack）の候補情報は含まれないため、
+    // 読み込み時は候補パネルを非表示に戻す（「次の案」「その他だけシャッフル」ボタンは、
+    // 直前に「自動配置を実行」した内容にのみ対応しているため）。
+    appState.dayExhaustive = null;
+    appState.nightExhaustive = null;
     hasRunOnce = true;
     editingLoc = null;
 
