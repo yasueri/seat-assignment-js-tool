@@ -95,14 +95,12 @@
     day: {
       inner: document.getElementById('day-candidate-inner'),
       count: document.getElementById('day-candidate-count'),
-      diff: document.getElementById('day-candidate-diff'),
       btnNext: document.getElementById('day-btn-next-pattern'),
       btnShuffle: document.getElementById('day-btn-shuffle-others'),
     },
     night: {
       inner: document.getElementById('night-candidate-inner'),
       count: document.getElementById('night-candidate-count'),
-      diff: document.getElementById('night-candidate-diff'),
       btnNext: document.getElementById('night-btn-next-pattern'),
       btnShuffle: document.getElementById('night-btn-shuffle-others'),
     },
@@ -377,13 +375,17 @@
   function buildSeatResultFromExhaustive(exhaustiveResult, labelPrefix, greedyFallback, allLogs) {
     if (exhaustiveResult.feasible && exhaustiveResult.solutions.length > 0) {
       const best = exhaustiveResult.solutions[0];
+      const onlyOneSolution = exhaustiveResult.totalSolutionsFound === 1;
       const solutionWord = exhaustiveResult.totalSolutionsFound >= EXHAUSTIVE_MAX_SOLUTIONS
         ? `${exhaustiveResult.totalSolutionsFound}通り以上`
         : `${exhaustiveResult.totalSolutionsFound}通り`;
-      allLogs.push({
-        level: 'info',
-        message: `【${labelPrefix}】secret.csv対象者（隣接禁止・禁止席）について全探索を行い、実行可能な配置を${solutionWord}見つけました。最も良さそうな案を採用しています（「次の案」ボタンで他の案に切り替えられます）。`,
-      });
+      // 実行可能な配置が1通りしかない場合は、複数の案から選んで採用したわけではなく、
+      // 「次の案」に切り替えられる他の案も存在しないため、「最も良さそうな案を採用して
+      // います」も「次の案ボタンで切り替えられます」の案内も付けない
+      const message = onlyOneSolution
+        ? `【${labelPrefix}】secret.csv対象者（隣接禁止・禁止席）について全探索を行い、実行可能な配置を${solutionWord}見つけました。`
+        : `【${labelPrefix}】secret.csv対象者（隣接禁止・禁止席）について全探索を行い、実行可能な配置を${solutionWord}見つけました。最も良さそうな案を採用しています（「次の案」ボタンで他の案に切り替えられます）。`;
+      allLogs.push({ level: 'info', message });
       return { state: best.state, overflow: best.overflow, logs: best.logs };
     }
     // 解けなかった場合（証明つきで解なし、またはタイムアウト）は従来の貪欲+MRVにフォールバックする
@@ -1086,8 +1088,8 @@
     renderLeaderGrid(els.nightGlGrid, 'nightGL');
     renderSeatGrid(els.nightSeatGrid, 'nightSeat', nightChangedNames);
     renderOverflow(els.nightOverflowList, appState.nightOverflow, 'nightOverflow', nightChangedNames);
-    renderCandidatePanel('day', appState.dayExhaustive, dayChangedNames);
-    renderCandidatePanel('night', appState.nightExhaustive, nightChangedNames);
+    renderCandidatePanel('day', appState.dayExhaustive);
+    renderCandidatePanel('night', appState.nightExhaustive);
   }
 
   // ---------- ■2（全探索backtrack）候補パネル（ver4.8で追加） ----------
@@ -1119,7 +1121,10 @@
 
   // 候補パネル（日勤 or 夜勤）の表示を更新する。exがnull（■2が解けなかった/
   // まだ自動配置していない/保存データを読み込んだ直後）ならパネルごと隠す。
-  function renderCandidatePanel(prefix, ex, changedNames) {
+  // 「次の案」「その他の座席をシャッフル」で座席が変わった人は、候補欄の下に
+  // 氏名を列挙するのではなく、座席カード自体を一瞬光らせて知らせる
+  // （changedNamesの利用先はrenderSeatGrid/renderOverflow側のハイライトのみ）。
+  function renderCandidatePanel(prefix, ex) {
     const els2 = candidateEls[prefix];
     if (!els2 || !els2.inner) return;
     if (!ex || !ex.solutions || ex.solutions.length === 0) {
@@ -1129,11 +1134,6 @@
     els2.inner.hidden = false;
     els2.count.textContent = `候補 ${ex.index + 1} / ${ex.solutions.length}`;
     els2.btnNext.disabled = ex.solutions.length <= 1;
-    if (changedNames && changedNames.size > 0) {
-      els2.diff.textContent = `変更: ${Array.from(changedNames).join('、')}さん`;
-    } else {
-      els2.diff.textContent = '';
-    }
   }
 
   // prefix: 'day' | 'night'。seatsKey/overflowKey: appState上のプロパティ名。
