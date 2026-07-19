@@ -100,18 +100,20 @@
     margin:0 0 12px;
   }
   .file-row{
-    display:flex;
+    display:grid;
+    grid-template-columns:138px 200px auto;
     align-items:center;
     gap:12px;
     margin-bottom:12px;
-    flex-wrap:wrap;
   }
   .file-btn{
-    display:inline-flex;
+    display:flex;
     align-items:center;
     justify-content:center;
+    width:100%;
+    box-sizing:border-box;
     font-size:15px;
-    padding:8px 16px;
+    padding:8px 12px;
     border-radius:7px;
     border:1px solid var(--accent);
     background:#fff;
@@ -134,6 +136,9 @@
     font-size:15px;
     font-family:var(--font-mono);
     color:var(--text-muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
   }
   .file-status{
     font-size:15px;
@@ -706,3 +711,28 @@
     70%{ box-shadow:0 0 0 2.5px var(--accent); }
     100%{ box-shadow:0 0 0 0 rgba(0,0,0,0); }
   }
+  /* ---------- ここから、readmeトグル刷新版・座席9番対応で追加したスタイル ---------- */
+  details.help details{margin:8px 0 4px;color:var(--text);}
+  details.help details summary{color:var(--accent-dark);font-size:15px;margin:0;padding:3px 0;cursor:pointer;}
+  details.help details[open] summary{margin-bottom:2px;}
+  details.help details .sub{border-left:2px solid var(--border);background:#FFFFFF;border-radius:0 6px 6px 0;padding:6px 12px 8px;margin:2px 0 8px;}
+  details.help .chip{display:inline-block;border-radius:9px;padding:0 7px;font-size:12px;font-weight:bold;}
+  details.help .chip.req{background:var(--overflow-bg);color:var(--overflow);}
+  details.help .chip.opt{background:#EEF1F6;color:var(--text-muted);}
+  details.help .ng{background:var(--lock-bg);border:1px solid #E4D2A0;border-radius:6px;padding:6px 10px;margin:8px 0;font-size:14px;}
+  details.help .ng b{color:var(--lock);}
+  details.help .seatmap td{width:34px;text-align:center;}
+  details.help .seatmap td.hl-r{background:var(--rookie-bg);color:var(--rookie);font-weight:bold;}
+  details.help .seatmap td.hl-n{background:#E6F0FB;color:var(--accent-dark);font-weight:bold;}
+  details.help .seatmap td.hl-m{background:var(--mentor-bg);color:var(--mentor);font-weight:bold;}
+  details.help .seatmap td.hl-x{background:repeating-linear-gradient(45deg,#EDEDED,#EDEDED 4px,#E1E1E1 4px,#E1E1E1 8px);color:var(--text-muted);font-weight:bold;}
+  details.help .seatmap td.void{background:var(--bg);color:var(--text-muted);border-style:dashed;}
+
+  /* 「印刷する」ボタン: 文言が短くなった分だけ他のボタン（現在の配置を保存 等）より
+     小さく見えないよう、幅は「現在の配置を保存」ボタン相当の最小幅を確保する。
+     高さは他の2行ボタンと揃うようmin-heightを指定し、中の文字（1行のみ）は
+     multiline-btnの justify-content:center によって上下中央に来る
+     （以前は非表示の2行目spanで高さを揃えていたが、その方式だと2行分の
+     ブロックが中央寄せされるだけで、見えている1行目は上寄りになってしまう
+     ため、min-height方式に変更した）。 */
+  #btn-print{ min-width:140px; min-height:65px; }

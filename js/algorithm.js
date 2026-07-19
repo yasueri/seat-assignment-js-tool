@@ -43,6 +43,31 @@ window.SeatTool.algorithm = (function () {
   // 「次の案」切り替え時の安定表示に使用）のとき、shuffleの代わりにこの順序を使う。
   const SEATS_IN_NUMBER_ORDER = SEATS.slice().sort((a, b) => a.number - b.number);
 
+  // 座席9番は運用上の理由により、通常の自動配置（新人固定席・優先順位の低い人から
+  // 埋めていく通常探索・その他スタッフ・全探索backtrackでの空席探索など、CSVで
+  // 明示指定されていない一般的な候補選びすべて）では使用しない。ただし、
+  // secret.csvの固定席・要サポート、ojt.csvの対象座席で座席9番が明示的に
+  // 指定されていた場合は例外的に配置する（下記 noteSeat9IfUsed でメッセージを出す）。
+  // canPlace / canPlaceSharedSeat の2箇所（全ての座席選定処理が最終的に通る共通の
+  // ゲート関数）で allowSeat9 引数により切り替えており、呼び出し元が
+  // 「本人の明示指定に由来する候補リストかどうか」に応じて true/false を渡す。
+  // 手動でのドラッグ＆ドロップ操作はこのチェックを経由しないため、手動での
+  // 座席9番への配置は常に可能。
+  const AUTO_PLACEMENT_EXCLUDED_SEAT_NUMBERS = new Set([9]);
+
+  // 座席9番は通常自動配置の対象外だが、固定席・要サポート・教官/OJT同席で明示的に
+  // 座席9番が指定されていた場合はそのまま配置する（新人固定席は常に座席5〜8のみを
+  // 使うため、座席9番が候補になることは構造上ない）。実際に座席9番へ配置された
+  // 場合は、意図した配置か確認しやすいようメッセージで知らせる。
+  function noteSeat9IfUsed(seat, personName, ruleLabel, logs) {
+    if (seat && seat.number === 9) {
+      logs.push({
+        level: 'info',
+        message: `通常、座席9番には配置しませんが、${personName}さんは${ruleLabel}で指定されていたため座席9番に配置しました。`,
+      });
+    }
+  }
+
   function seatByNumber(n) { return SEAT_BY_NUMBER[n] || null; }
   function numberOfKey(key) { return NUMBER_BY_KEY[key] || null; }
   function numberOfSeat(row, col) { return numberOfKey(`${row}-${col}`); }
@@ -209,9 +234,11 @@ window.SeatTool.algorithm = (function () {
   // そうでなければ[15,14]を先に試す。以降はどちらの教官でも共通の並び
   // （フォールバック）。この並びはレイアウトに紐づく固定値のためojt.csvには
   // 持たせずここに定数として置く（readme.txtにも同じ並びを記載する）。
+  // 末尾の(10,9)は座席9番が自動配置の対象外のため実際には使われることが
+  // なかったため削除した（ver4.10）。
   const OJT_FALLBACK_PAIR_TAIL = [
     [12, 11], [8, 7], [4, 3], [11, 7], [11, 10], [7, 6],
-    [3, 2], [14, 13], [10, 6], [6, 5], [2, 1], [10, 9],
+    [3, 2], [14, 13], [10, 6], [6, 5], [2, 1],
   ];
 
   // ojt.csvの行から、判定・配置に使うインデックスを組み立てる
@@ -268,7 +295,8 @@ window.SeatTool.algorithm = (function () {
   // 対象とする（同時刻の2人がまるごと入るため）。通常のcanPlaceと違い、
   // 時間の重なりはチェックしない（教官・OJTの同席は時間重複の例外として扱う）。
   // 禁止席・隣接禁止は通常どおり両者に適用する。
-  function canPlaceSharedSeat(personA, personB, seat, state, forbiddenSeatSet, forbiddenPairSet) {
+  function canPlaceSharedSeat(personA, personB, seat, state, forbiddenSeatSet, forbiddenPairSet, allowSeat9) {
+    if (!allowSeat9 && AUTO_PLACEMENT_EXCLUDED_SEAT_NUMBERS.has(seat.number)) return false;
     if (slotOccupants(state[seat.key]).length > 0) return false;
     if (forbiddenSeatSet.has(`${personA.name}|${seat.key}`)) return false;
     if (forbiddenSeatSet.has(`${personB.name}|${seat.key}`)) return false;
@@ -301,20 +329,25 @@ window.SeatTool.algorithm = (function () {
   // 座席番号の優先順リストから、この人が配置できる最初の座席を探す（教官不在で
   // OJT対象者を1人で配置する場合に使用）。優先順を厳密に守るため、
   // findSeatAmongCandidatesのようなシャッフルはしない。
+  // ここに渡される候補は必ず「ojt.csvの対象座席で明示指定された座席（＋既定順の残り）」
+  // であり、座席9番は明示指定されない限りこの並びに現れないため、
+  // 座席9番の除外チェックはここでは行わない（明示指定があれば配置してよい）。
   function findSeatInOrder(seatNumbers, person, state, forbiddenSeatSet, forbiddenPairSet) {
     for (const num of seatNumbers) {
       const seat = seatByNumber(num);
-      if (seat && canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet)) return seat;
+      if (seat && canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet, true)) return seat;
     }
     return null;
   }
 
   // 座席番号の優先順リストから、教官+OJT一人目が同席できる最初の座席を探す
-  // （優先順を厳密に守るため、findSeatAmongCandidatesのようなシャッフルはしない）
-  function findSharedSeatInOrder(seatNumbers, personA, personB, state, forbiddenSeatSet, forbiddenPairSet) {
+  // （優先順を厳密に守るため、findSeatAmongCandidatesのようなシャッフルはしない）。
+  // allowSeat9: 呼び出し元の候補リストがojt.csvの明示指定に由来する場合はtrueを渡す
+  // （「同列で1つ前」の自動算出候補など、明示指定に由来しない候補リストではfalse＝除外のまま）。
+  function findSharedSeatInOrder(seatNumbers, personA, personB, state, forbiddenSeatSet, forbiddenPairSet, allowSeat9) {
     for (const num of seatNumbers) {
       const seat = seatByNumber(num);
-      if (seat && canPlaceSharedSeat(personA, personB, seat, state, forbiddenSeatSet, forbiddenPairSet)) return seat;
+      if (seat && canPlaceSharedSeat(personA, personB, seat, state, forbiddenSeatSet, forbiddenPairSet, allowSeat9)) return seat;
     }
     return null;
   }
@@ -328,13 +361,17 @@ window.SeatTool.algorithm = (function () {
   // ペア候補（[教官側座席番号, OJT二人目側座席番号]の配列）から、両方が配置可能な
   // 最初の組を探す。教官側は同席（canPlaceSharedSeat）、OJT二人目側は通常の
   // canPlace（他の誰かと時間が重ならなければ同席可）で判定する。
+  // pairOrderはシステム既定の候補配列（primaries・OJT_FALLBACK_PAIR_TAIL）に
+  // 由来するため、allowSeat9=trueを渡している。現状はどちらの配列にも座席9番を
+  // 含まないため挙動に変化はないが、将来これらの配列に座席9番を含むペアを
+  // 追加した場合に備えた措置。
   function findOjtPairInOrder(pairOrder, mentor, trainee1, trainee2, state, forbiddenSeatSet, forbiddenPairSet) {
     for (const [numA, numB] of pairOrder) {
       const seatA = seatByNumber(numA);
       const seatB = seatByNumber(numB);
       if (!seatA || !seatB) continue;
-      if (canPlaceSharedSeat(mentor, trainee1, seatA, state, forbiddenSeatSet, forbiddenPairSet)
-        && canPlace(trainee2, seatB, state, forbiddenSeatSet, forbiddenPairSet)) {
+      if (canPlaceSharedSeat(mentor, trainee1, seatA, state, forbiddenSeatSet, forbiddenPairSet, true)
+        && canPlace(trainee2, seatB, state, forbiddenSeatSet, forbiddenPairSet, true)) {
         return { seatA, seatB };
       }
     }
@@ -395,6 +432,7 @@ window.SeatTool.algorithm = (function () {
           || findSeat(trainee, state, forbiddenSeatSet, forbiddenPairSet, false);
         if (seat) {
           seatOjtTraineeAlone(state, seat.key, trainee);
+          noteSeat9IfUsed(seat, traineeName, '教官・OJT同席（対象座席）', logs);
         } else {
           logs.push({ level: 'error', showDialog: true, message: `${traineeName}さんを配置できません。配置ルールに矛盾がある可能性があります。` });
           overflow.push(trainee);
@@ -426,13 +464,14 @@ window.SeatTool.algorithm = (function () {
         // 既定順（15→12→8→4→他）で見つからなければ、既に配置済みの教官1名・OJT2名の
         // 座席の同列1つ前を追加候補として試す
         const upCandidates = ojtAdjacentUpCandidates(pairSeatNumbers);
-        const seat = findSharedSeatInOrder(singleOrder, mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet)
+        const seat = findSharedSeatInOrder(singleOrder, mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet, true)
           || (upCandidates.length > 0 ? findSharedSeatInOrder(upCandidates, mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet) : null)
           || findSharedSeatAnywhere(mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet);
         if (seat) {
           seatPersonPair(state, seat.key, mentor, trainee);
           placedNames.add(mentorName);
           placedNames.add(traineeNames[0]);
+          noteSeat9IfUsed(seat, mentorName, '教官・OJT同席（対象座席）', logs);
         } else {
           // 15席すべて埋まっている等、極めて稀なケース。教官・OJTをそれぞれ独立に配置する
           logs.push({ level: 'warn', message: `${mentorName}さんと${traineeNames[0]}さんを同席させる座席が見つからなかったため、それぞれ個別に配置しました。` });
@@ -451,6 +490,8 @@ window.SeatTool.algorithm = (function () {
           placedNames.add(traineeNames[0]);
           placedNames.add(traineeNames[1]);
           pairSeatNumbers.push(pair.seatA.number, pair.seatB.number);
+          noteSeat9IfUsed(pair.seatA, mentorName, '教官・OJT同席（対象座席）', logs);
+          noteSeat9IfUsed(pair.seatB, traineeNames[1], '教官・OJT同席（対象座席）', logs);
         } else {
           // ペア候補（主要2つ＋共通フォールバック12個）がすべて埋まっていた場合は、
           // 教官・OJT二人をまとめて同席させることにこだわらず、通常の空席探索に切り替える
@@ -466,7 +507,8 @@ window.SeatTool.algorithm = (function () {
   // 座席1つに対して、この人を配置してよいか（容量・重複・ルール1・ルール2）
   // 注: ルール1（隣接禁止）は勤務時間が重なっているかどうかに関係なく常に適用する。
   //     急な残業などで勤務時間が伸び、結果的に隣接してしまうケースを避けるため。
-  function canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet) {
+  function canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet, allowSeat9) {
+    if (!allowSeat9 && AUTO_PLACEMENT_EXCLUDED_SEAT_NUMBERS.has(seat.number)) return false;
     const occupants = slotOccupants(state[seat.key]);
     if (occupants.length >= 2) return false;
     if (occupants.length === 1 && overlaps(person, occupants[0])) return false;
@@ -553,9 +595,12 @@ window.SeatTool.algorithm = (function () {
   // 条件に合う最初の1つを返す。固定席の対象座席は、複数指定した場合その入力順が
   // そのまま優先順位になる仕様のため、ランダム選択のfindSeatAmongCandidatesとは
   // 別に用意している。
+  // この関数は secret.csv の固定席・要サポートで明示指定された座席リストにのみ
+  // 使うため、座席9番の除外チェックは行わない（候補に9番があるのは明示指定が
+  // あった場合のみのため）。
   function findSeatInGivenOrder(candidateSeats, person, state, forbiddenSeatSet, forbiddenPairSet) {
     for (const seat of candidateSeats) {
-      if (canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet)) return seat;
+      if (canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet, true)) return seat;
     }
     return null;
   }
@@ -735,6 +780,8 @@ window.SeatTool.algorithm = (function () {
       if (seat) {
         seatPerson(state, seat.key, person);
         placedNames.add(person.name);
+        const ruleLabel = (designatedSeatsMap.get(person.name) || []).includes(seat.key) ? '固定席' : '要サポート';
+        noteSeat9IfUsed(seat, person.name, ruleLabel, logs);
       } else {
         // 固定席・要サポートの指定がない（または指定席がすべて埋まっていた）場合は
         // 通常の空席探索にフォールバックする
@@ -757,9 +804,13 @@ window.SeatTool.algorithm = (function () {
 
     rookieTop.forEach((person, i) => {
       const targetSeat = SEATS.find(s => s.row === i + 1 && s.col === 2);
-      if (canPlace(person, targetSeat, state, forbiddenSeatSet, forbiddenPairSet)) {
+      // 現状のtargetSeatは常に列2（座席5〜8）のため座席9番になることはないが、
+      // 将来この計算式が変わり座席9番が対象になった場合でも新人固定席として
+      // 明示的に指定された座席として扱われるよう、allowSeat9=trueを渡しておく。
+      if (canPlace(person, targetSeat, state, forbiddenSeatSet, forbiddenPairSet, true)) {
         seatPerson(state, targetSeat.key, person);
         placedNames.add(person.name);
+        noteSeat9IfUsed(targetSeat, person.name, '新人固定席', logs);
       } else {
         logs.push({
           level: 'warn', showDialog: true,
@@ -797,6 +848,7 @@ window.SeatTool.algorithm = (function () {
       if (seat) {
         seatPerson(state, seat.key, person);
         placedNames.add(person.name);
+        noteSeat9IfUsed(seat, person.name, '固定席', logs);
       } else {
         logs.push({
           level: 'warn', showDialog: true,
@@ -828,6 +880,7 @@ window.SeatTool.algorithm = (function () {
       if (seat) {
         seatPerson(state, seat.key, person);
         placedNames.add(person.name);
+        noteSeat9IfUsed(seat, person.name, '要サポート', logs);
       } else {
         logs.push({
           level: 'warn', showDialog: true,
@@ -1183,8 +1236,9 @@ window.SeatTool.algorithm = (function () {
   //   （開始時刻が12:00以降、または前残業TRUEかつ開始時刻が10:00以降）
   // ・役席→GLの順に、それぞれ出勤時刻が早い順（同時刻ならCSVで後ろの行の人が先）に
   //   1マス目から詰めて配置する
-  // ・合計6名を超える分（7人目以降）はどこにも配置せず、メッセージで知らせる
-  //   （あふれには入れない。実運用上まず発生しない想定のため）
+  // ・合計6名を超える分（7人目以降）は「あふれ」に入れる（呼び出し側で
+  //   通常のあふれ欄に合流させる。実運用上まず発生しない想定だが、発生しても
+  //   カードが消えてしまわないようにするため）
   // ============================================================
   function emptyLeaderState() {
     const s = {};
@@ -1192,14 +1246,19 @@ window.SeatTool.algorithm = (function () {
     return s;
   }
 
-  function fillLeaderArea(stateObj, peopleList, logs, excessMessage) {
+  // overflowOut: 7人目以降を積み込む配列（呼び出し側で用意し、early・lateの
+  // 両方から共通で渡す。あふれとして扱うだけなので、あふれの理由を示す個別の
+  // メッセージは出さない＝通常の座席1〜15があふれる場合と同じ扱い）
+  function fillLeaderArea(stateObj, peopleList, overflowOut) {
     const yakuseki = peopleList.filter(p => p.role === '役席').sort(byStartTimeThenLaterRowFirst);
     const gl = peopleList.filter(p => p.role === 'GL').sort(byStartTimeThenLaterRowFirst);
     const combined = [...yakuseki, ...gl];
 
     const positions = new Array(6).fill(null);
-    combined.forEach((p, i) => { if (i < 6) positions[i] = p; });
-    const excessCount = Math.max(0, combined.length - 6);
+    combined.forEach((p, i) => {
+      if (i < 6) positions[i] = p;
+      else overflowOut.push(p);
+    });
 
     let n = 0;
     for (let r = 1; r <= 2; r++) {
@@ -1208,26 +1267,18 @@ window.SeatTool.algorithm = (function () {
         n++;
       }
     }
-
-    if (excessCount > 0) {
-      logs.push({
-        level: 'error',
-        showDialog: true,
-        message: excessMessage,
-      });
-    }
   }
-
-  const LEADER_EXCESS_MESSAGE = '役席・GLの合計が6名を超えており、配置できません。プリントアウト後に手書きしてください';
 
   /**
    * leaderRows: [{ name, start, end, startMin, endMin, frontOT, backOT, role:'役席'|'GL', isLate }]
    *   （役割が役席・GLのスタッフのみを渡すこと。日付抽出済みであること）
-   * 戻り値: { early, late, logs }
+   * 戻り値: { early, late, logs, overflow }
    *   early / late: { "行-列": 人 | null }（1〜2の2行×3列、1枠1名）
+   *   overflow: 6名を超えて配置できなかった人（呼び出し側で通常のあふれ欄に合流させる）
    */
   function assignLeaderAreas(leaderRows) {
     const logs = [];
+    const overflow = [];
     const early = emptyLeaderState();
     const late = emptyLeaderState();
 
@@ -1235,10 +1286,10 @@ window.SeatTool.algorithm = (function () {
     const earlyPeople = withIndex.filter(p => !p.isLate);
     const latePeople = withIndex.filter(p => p.isLate);
 
-    fillLeaderArea(early, earlyPeople, logs, LEADER_EXCESS_MESSAGE);
-    fillLeaderArea(late, latePeople, logs, LEADER_EXCESS_MESSAGE);
+    fillLeaderArea(early, earlyPeople, overflow);
+    fillLeaderArea(late, latePeople, overflow);
 
-    return { early, late, logs };
+    return { early, late, logs, overflow };
   }
 
   // ============================================================

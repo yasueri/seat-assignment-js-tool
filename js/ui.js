@@ -524,7 +524,9 @@
     appState.seats = seatResult.state;
     appState.early = leaderResult.early;
     appState.late = leaderResult.late;
-    appState.overflow = seatResult.overflow;
+    // 早番・遅番エリアの6名を超えた役席・GL（leaderResult.overflow）も、
+    // 座席1〜15のあふれ（seatResult.overflow）と同じ「あふれ」欄に合流させる
+    appState.overflow = [...seatResult.overflow, ...leaderResult.overflow];
     appState.nightSeats = nightResult.state;
     appState.nightGL = nightLeaderResult.glState;
     appState.nightSpare = initLeaderState(); // 予備枠（左側）は自動配置では使わない
@@ -1861,6 +1863,21 @@
     win.document.write(buildPrintHtml(dateLabel || defaultLabel, generatedLabel));
     win.document.close();
 
+    // 日付確認のOKを押した時点で、追加のクリックなしに印刷プレビュー（ブラウザの
+    // 印刷ダイアログ）まで進める。document.write直後はレイアウト未確定のことがある
+    // ため、load イベントを待ってから呼び出す。onloadが発火しない環境向けの保険として
+    // 短いタイムアウトでも一度だけ呼び出す（printedフラグで二重呼び出しを防ぐ）。
+    // ページ側の「この内容を印刷する」ボタンは、印刷ダイアログを誤って閉じた場合の
+    // 手動の再印刷手段として残す。
+    let printed = false;
+    const triggerPrint = () => {
+      if (printed) return;
+      printed = true;
+      win.focus();
+      win.print();
+    };
+    win.onload = triggerPrint;
+    setTimeout(triggerPrint, 300);
   });
 
 })(window.SeatTool);
