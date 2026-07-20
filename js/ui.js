@@ -22,7 +22,7 @@
   const LEADER_ROWS = [1, 2], LEADER_COLS = [1, 2, 3];
 
   // ■2（全探索backtrack）を「自動配置を実行」の都度、日勤・夜勤それぞれで走らせる際の設定。
-  // secret.csv対象者（隣接禁止・禁止席）は通常少人数のはずで、実運用では一瞬で解が
+  // 隣接禁止・禁止席対象者は通常少人数のはずで、実運用では一瞬で解が
   // 出る想定のため、タイムアウトは短め（2秒）にしてある。解けた場合は「次の案」ボタンで
   // 上位EXHAUSTIVE_MAX_SOLUTIONS件まで順番に見られる。
   const EXHAUSTIVE_MAX_SOLUTIONS = 20;
@@ -63,7 +63,7 @@
     ojtRows: null, ojtIndexes: null,
     // ■2（全探索backtrack）の結果（ver4.8で追加）。「自動配置を実行」のたびに作り直す。
     // { feasible, timedOut, totalSolutionsFound, solutions:[...], bestPartial, context, index }
-    // 保存データの読み込み時や、secret.csv対象者が0名などで解が1件しかない場合はnull。
+    // 保存データの読み込み時や、隣接禁止・禁止席対象者が0名などで解が1件しかない場合はnull。
     dayExhaustive: null, nightExhaustive: null,
   };
   let dragSource = null;
@@ -383,8 +383,8 @@
       // 「次の案」に切り替えられる他の案も存在しないため、「最も良さそうな案を採用して
       // います」も「次の案ボタンで切り替えられます」の案内も付けない
       const message = onlyOneSolution
-        ? `【${labelPrefix}】secret.csv対象者（隣接禁止・禁止席）について全探索を行い、実行可能な配置を${solutionWord}見つけました。`
-        : `【${labelPrefix}】secret.csv対象者（隣接禁止・禁止席）について全探索を行い、実行可能な配置を${solutionWord}見つけました。最も良さそうな案を採用しています（「次の案」ボタンで他の案に切り替えられます）。`;
+        ? `【${labelPrefix}】隣接禁止・禁止席対象者について全探索を行い、実行可能な配置を${solutionWord}見つけました。`
+        : `【${labelPrefix}】隣接禁止・禁止席対象者について全探索を行い、実行可能な配置を${solutionWord}見つけました。最も良さそうな案を採用しています（「次の案」ボタンで他の案に切り替えられます）。`;
       allLogs.push({ level: 'info', message });
       return { state: best.state, overflow: best.overflow, logs: best.logs };
     }
@@ -392,12 +392,12 @@
     if (exhaustiveResult.timedOut) {
       allLogs.push({
         level: 'warn',
-        message: `【${labelPrefix}】secret.csv対象者についての全探索が制限時間内に終わらなかったため、通常の配置方法（貪欲法）で配置しました。`,
+        message: `【${labelPrefix}】隣接禁止・禁止席対象者についての全探索が制限時間内に終わらなかったため、通常の配置方法（貪欲法）で配置しました。`,
       });
     } else if (exhaustiveResult.bestPartial) {
       allLogs.push({
         level: 'warn', showDialog: true,
-        message: `【${labelPrefix}】secret.csv対象者を全員配置できる組み合わせが見つかりませんでした（最も惜しい組み合わせでも配置できなかった対象者: ${exhaustiveResult.bestPartial.unplacedNames.join('、')}さん）。通常の配置方法で処理します。secret.csvの条件を確認してください。`,
+        message: `【${labelPrefix}】隣接禁止・禁止席対象者を全員配置できる組み合わせが見つかりませんでした（最も惜しい組み合わせでも配置できなかった対象者: ${exhaustiveResult.bestPartial.unplacedNames.join('、')}さん）。通常の配置方法で処理します。secret.csvの条件を確認してください。`,
       });
     }
     return greedyFallback();
@@ -464,7 +464,7 @@
 
     // --- 日勤 ---
     // 教官・OJT（固定席の次・新人固定席より前の優先順位）は assignSeats / assignSeatsExhaustive 内で処理する。
-    // secret.csv対象者（隣接禁止・禁止席）の配置は、ver4.8からまず■2（全探索backtrack）で
+    // 隣接禁止・禁止席対象者の配置は、ver4.8からまず■2（全探索backtrack）で
     // 解けるかどうかを試す。解けた場合はその最良解（スコア最上位）を採用し、解が
     // 証明つきで存在しない場合・制限時間内に見つからなかった場合のみ、従来の
     // 貪欲+MRV（assignSeats）にフォールバックする。
@@ -502,7 +502,7 @@
     //    隣接するのは許容）。座席側に回った「夜勤GL席」指定者にはバッジが付く。
     //    夜勤は教官・OJTの役席・GL振り替え（splitDayRows側の分岐）は行わないが、
     //    OP同士の教官・OJTペア自体はここでも同じロジックが動く（実害はない前提）。
-    //    secret.csv対象者の配置は日勤と同様、まず■2（全探索backtrack）を試す。
+    //    隣接禁止・禁止席対象者の配置は日勤と同様、まず■2（全探索backtrack）を試す。
     const nightExhaustiveOptions = { nightContext: true, ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS, timeBudgetMs: EXHAUSTIVE_TIME_BUDGET_MS };
     const nightExhaustiveResult = assignSeatsExhaustive(nightSeatRows, rookieParsed.rows, nightSecretRows, nightExhaustiveOptions);
     const nightResult = buildSeatResultFromExhaustive(
@@ -1326,6 +1326,22 @@
         crossShiftWarnings.push(`【夜勤】夜勤GL枠に役席・GLが配置されていません。夜勤の役席・GL（${names}）のうち1名を夜勤GL枠へ移動してください`);
       }
     }
+
+    // ---- 早番・遅番・夜勤GL枠にOPが手動配置されていないかのチェック ----
+    // これらの枠は役席・GL専用（algorithm.jsのassignLeaderAreas/assignNightLeaders参照）。
+    // ドラッグ&ドロップでOPを紛れ込ませてしまった場合に検出する。
+    const leaderFrames = [
+      { label: '早番', state: appState.early },
+      { label: '遅番', state: appState.late },
+      { label: '夜勤GL', state: appState.nightGL },
+    ];
+    leaderFrames.forEach(({ label, state }) => {
+      Object.values(state).forEach(p => {
+        if (p && p.role === 'OP') {
+          violations.push(`${label}枠にOPの${p.name}さんが配置されています（${label}枠は役席・GL専用です）`);
+        }
+      });
+    });
 
     const resultLogs = [
       ...violations.map(m => ({ level: 'error', message: m })),

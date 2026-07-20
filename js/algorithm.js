@@ -1,8 +1,8 @@
 // ============================================================
 // algorithm.js
-// 座席の定義と、新人固定席 → secret.csv対象者 → その他スタッフ
-// の順で座席を割り当てるアルゴリズムを担当する。secret.csv対象者
-// （隣接禁止・禁止席）の全探索backtrack（■2。旧algorithmExhaustive.js。
+// 座席の定義と、新人固定席 → 隣接禁止・禁止席対象者 → その他スタッフ
+// の順で座席を割り当てるアルゴリズムを担当する。隣接禁止・禁止席対象者
+// の全探索backtrack（■2。旧algorithmExhaustive.js。
 // ver4.9でこのファイルに統合）も含む。
 // CSVの形式やDOMには一切依存しない（テストしやすくするため）。
 // 他ファイルからは window.SeatTool.algorithm 経由で利用する。
@@ -624,7 +624,7 @@ window.SeatTool.algorithm = (function () {
     return (preferred.length > 0 ? preferred : valid)[0];
   }
 
-  // 全15席の中から探す通常版（その他スタッフ・secret.csv対象者・フォールバック用）。
+  // 全15席の中から探す通常版（その他スタッフ・隣接禁止・禁止席対象者・フォールバック用）。
   // deterministic=trueのときは座席番号順（SEATS_IN_NUMBER_ORDER）から探す。
   function findSeat(person, state, forbiddenSeatSet, forbiddenPairSet, avoidAdjacency, deterministic) {
     const pool = deterministic ? SEATS_IN_NUMBER_ORDER : SEATS;
@@ -638,7 +638,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   // 出勤時刻が早い順。同時刻ならshift.csvで後ろの行の人を先に処理する
-  // （secret.csv対象者・その他スタッフの両方で使う共通の並び順）
+  // （隣接禁止・禁止席対象者・その他スタッフの両方で使う共通の並び順）
   function byStartTimeThenLaterRowFirst(a, b) {
     if (a.startMin !== b.startMin) return a.startMin - b.startMin;
     return b.shiftIndex - a.shiftIndex;
@@ -903,7 +903,7 @@ window.SeatTool.algorithm = (function () {
 
   // ---- 5. その他スタッフ（出勤時刻が早い順）。assignSeats / assignSeatsExhaustive共通 ----
   // deterministic=true（ver4.8で追加）のときは座席探索をランダムにせず座席番号順で行う。
-  // ■2（全探索backtrack）で、secret.csv対象者側の「次の案」を切り替えても
+  // ■2（全探索backtrack）で、隣接禁止・禁止席対象者側の「次の案」を切り替えても
   // その他スタッフが無関係に動き回らないようにするための決定的モード。
   // 省略時はfalse（従来どおりランダム＝通常のassignSeatsの挙動）。
   function placeOthers(people, placedNames, state, forbiddenSeatSet, forbiddenPairSet, overflow, logs, nightContext, deterministic) {
@@ -969,7 +969,7 @@ window.SeatTool.algorithm = (function () {
 
   // ============================================================
   // ■2（全パターン検索・全探索backtrack）
-  // secret.csv対象者（隣接禁止・禁止席）の配置を担当する。普段の貪欲+MRV（assignSeats）
+  // 隣接禁止・禁止席対象者の配置を担当する。普段の貪欲+MRV（assignSeats）
   // とはロジックの性格が異なる（実際にすべての組み合わせを尽くす）ため、可読性のために
   // ここでセクションを分けている（旧ver4.8まではalgorithmExhaustive.jsという別ファイルに
   // 分離していたが、ver4.9でこのファイルへ統合した。読み込むファイルが1つで済むほか、
@@ -1032,7 +1032,7 @@ window.SeatTool.algorithm = (function () {
    *   maxSolutions: 最終的に返す上位解の件数（既定20。「次の案」ボタンで一巡できる件数の目安）
    *   poolCap:      採点前に内部的に集める解の件数の上限（既定60。多すぎると採点コストが増えるため上限を設ける）
    *   timeBudgetMs: 探索の制限時間（既定2000ms=2秒。「自動配置を実行」のたびに日勤・夜勤
-   *                 それぞれで走らせる前提のため短めに設定。secret.csv対象者は通常
+   *                 それぞれで走らせる前提のため短めに設定。隣接禁止・禁止席対象者は通常
    *                 少人数のはずで、実運用では一瞬で解が出る想定）。これを超えたら打ち切り、
    *                 その時点で見つかっている解・部分解で結果を返す（timedOut:trueで示す）
    *
@@ -1048,7 +1048,7 @@ window.SeatTool.algorithm = (function () {
    *     stateBeforeOthers, overflowBeforeOthers,     「その他」を配置する直前の状態
    *     logsBeforeOthers, placedNamesBeforeOthers,   （reshuffleOthers用に保持）
    *   }],  スコア順（良い順）の上位solutions。「その他」はランダムではなく
-   *        座席番号順の決定的な順序で配置している（secret.csv対象者側の案を
+   *        座席番号順の決定的な順序で配置している（隣接禁止・禁止席対象者側の案を
    *        切り替えたときに、その他の人が無関係に動いて見えるのを防ぐため）。
    *   bestPartial: null | { placedCount, unplacedNames },
    *     feasible:false のとき、最も惜しかった（最も多く配置できた）部分解の情報。
@@ -1160,9 +1160,9 @@ window.SeatTool.algorithm = (function () {
     const feasible = foundAssignments.length > 0;
 
     function buildFullResult(assignedMap) {
-      // secret.csv対象者（remainingPriority）まで確定させた状態を、
+      // 隣接禁止・禁止席対象者（remainingPriority）まで確定させた状態を、
       // 「その他」を配置する直前のスナップショットとして保持しておく。
-      // これにより、あとから reshuffleOthers() で secret.csv対象者側の配置は
+      // これにより、あとから reshuffleOthers() で隣接禁止・禁止席対象者側の配置は
       // そのままに「その他」だけを配置し直せる（■2の「その他だけシャッフル」ボタン用）。
       const stateBeforeOthers = deepCloneState(baseState);
       for (const [name, seatKey] of assignedMap.entries()) {
@@ -1175,7 +1175,7 @@ window.SeatTool.algorithm = (function () {
 
       // 「その他」は既定では座席番号順の決定的な配置にする（ランダムにしない）。
       // ランダムな配置がほしい場合は reshuffleOthers() を別途呼ぶ（■2の
-      // 「その他だけシャッフル」ボタン用）。これにより、secret.csv対象者側の
+      // 「その他だけシャッフル」ボタン用）。これにより、隣接禁止・禁止席対象者側の
       // 「次の案」を切り替えたときに、その他の人が無関係に動いて見えるのを防ぐ。
       const state = deepCloneState(stateBeforeOthers);
       const overflow = overflowBeforeOthers.slice();
@@ -1209,7 +1209,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   /**
-   * secret.csv対象者（隣接禁止・禁止席の対象者）側の座席はそのままに、
+   * 隣接禁止・禁止席対象者側の座席はそのままに、
    * 「その他」スタッフだけをランダムに配置し直す（■2の「その他だけシャッフル」ボタン用）。
    * solution: assignSeatsExhaustive の戻り値 solutions[i]（stateBeforeOthers等を含むもの）
    * context:  assignSeatsExhaustive の戻り値の context をそのまま渡す
