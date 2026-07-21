@@ -11,6 +11,7 @@
   --accent:#2F6FED; --accent-dark:#1E52C0;
   --rookie:#2E8B57; --rookie-bg:#E7F5EE;
   --lock:#B8860B;  --lock-bg:#FBF3DE;
+  --adjacent:#C2255C; --adjacent-bg:#FCE8EF;
   --mentor:#6B46C1; --mentor-bg:#F1EAFB;
   --support:#0E7C86; --support-bg:#E3F4F5;
   --warn:#C0392B; --warn-bg:#FBEAE8;
@@ -128,6 +129,7 @@ small,.note{color:var(--muted);}
 .b-rookie{background:var(--rookie-bg);color:var(--rookie);}
 .b-fix{background:#E6F0FB;color:var(--accent-dark);}
 .b-lock{background:var(--lock-bg);color:var(--lock);}
+.b-adjacent{background:var(--adjacent-bg);color:var(--adjacent);}
 .b-sup{background:var(--support-bg);color:var(--support);}
 .b-ojt{background:var(--mentor-bg);color:var(--mentor);}
 .ot{background:#FFF3B0;color:#8A6D00;padding:0 4px;border-radius:3px;}
@@ -343,15 +345,16 @@ small,.note{color:var(--muted);}
     <figure>
       <table>
         <tr><th>色</th><th>意味</th></tr>
-        <tr><td><span class="bdg b-rookie">5〜8</span></td><td>新人固定席（rookie.csv使用時、上から新人1〜4）</td></tr>
+        <tr><td><span class="bdg b-rookie">5〜8</span></td><td>新人固定席。新人1〜7の順に <b>5→10→6→11→7→12→8</b>（10・11・12は他の用途と重なるため色は付けていません）</td></tr>
         <tr><td><span class="bdg b-fix">10</span></td><td>夜勤の役席・GLが2名以上の日、2人目が入る席</td></tr>
-        <tr><td><span class="bdg b-ojt">15・12・8・4</span></td><td>教官・OJT同席の既定の探索順（15→12→8→4→他）</td></tr>
+        <tr><td><span class="bdg b-ojt">15・12・8・4</span></td><td>教官1名+OJT1名の同席の既定順（15→12→8→4→3→2→1→他）</td></tr>
         <tr><td><span class="bdg b-lock">9</span></td><td>通常の自動配置（新人固定席・通常探索など）では対象外。固定席・要サポート・教官/OJT同席で明示指定があれば例外的に配置され、メッセージで知らせる。手動配置は常に可</td></tr>
       </table>
       <p class="note" style="margin-top:-6px">
         <b>列</b> … 縦のまとまり（列2＝座席5〜8）<br>
-        <b>隣接</b> … 同じ列で上下にとなり合うこと（例: 5と6）。<br>
-        隣接禁止・夜勤の隣接回避はこの意味で判定します。
+        <b>隣接</b>（隣接禁止）… <b>上下・左右・斜めのすべて</b>でとなり合うこと。<br>
+        例: 座席1のとなりは 2・5・6／座席6のとなりは 1・2・3・5・7・9・10・11。<br>
+        <b>夜勤の隣接回避だけは別</b>で、同じ列で上下にとなり合う場合（例: 5と6）のみを避けます。
       </p>
     </figure>
   </div>
@@ -361,11 +364,11 @@ small,.note{color:var(--muted);}
   <h2 id="sec-badge">画面の見かた：バッジ<span class="back-to-toc">（<a href="#toc">▲ 目次</a>）</span></h2>
   <table>
     <tr><th>表示</th><th>意味</th></tr>
-    <tr><td><span class="bdg b-rookie">新人1</span>〜<span class="bdg b-rookie">新人4</span></td><td>rookie.csv記載者の新人固定席での優先順位</td></tr>
+    <tr><td><span class="bdg b-rookie">新人1</span>〜<span class="bdg b-rookie">新人7</span></td><td>rookie.csv記載者の新人固定席での優先順位（8人目以降はバッジなしで通常配置）</td></tr>
     <tr><td><span class="bdg b-fix">固定席</span></td><td>secret.csvで座席指定。候補1〜2件は座席番号、3件以上は「複数有」と表示</td></tr>
     <tr><td><span class="bdg b-sup">要サポ</span></td><td>要サポート対象者。表示ルールは固定席と同じ</td></tr>
     <tr><td><span class="bdg b-lock">禁止席</span></td><td>禁止席の対象者。表示ルールは固定席と同じ</td></tr>
-    <tr><td><span class="bdg b-lock">隣禁止</span></td><td>ペア（secret.csvの行）ごとにA・B・C…。自分が属するペアの記号をすべて表示（例: 2ペアなら「AB」、4ペア以上は「4以上」）。同じ記号の人同士が相手</td></tr>
+    <tr><td><span class="bdg b-adjacent">隣禁止</span></td><td>ペア（secret.csvの行）ごとにA・B・C…。自分が属するペアの記号をすべて表示（例: 2ペアなら「AB」、4ペア以上は「4以上」）。同じ記号の人同士が相手</td></tr>
     <tr><td><span class="bdg b-fix">夜勤GL席</span></td><td>「夜勤GL席」指定だが枠に選ばれず座席1〜15に配置された人（夜勤のみ）</td></tr>
     <tr><td><span class="bdg b-ojt">教官</span> / <span class="bdg b-ojt">OJT</span></td><td>ojt.csv記載者</td></tr>
     <tr><td><span class="ot">7:30※</span></td><td>時刻が黄色＋※ … その時刻は残業（前残業/後残業）</td></tr>
@@ -381,32 +384,57 @@ small,.note{color:var(--muted);}
     ・夜勤の役席・GL → 夜勤GL枠に1名（「夜勤GL席」指定者を優先。複数/不在ならランダム）、2人目は座席10へ、3人目以降は通常配置に合流
   </div>
   <ol class="pipe">
-    <li><b>0. 優先フラグ</b><span class="src">secret.csv</span><br>全ルール中の最優先。数値が小さい人から。同数値は「新人→固定席→教官・OJT→要サポート→その他」→出勤時刻順</li>
-    <li><b>1. 新人固定席</b><span class="src">rookie.csv</span><br>席5→6→7→8へ上から詰める（上位4名・OPのみ）</li>
-    <li><b>2. 固定席</b><span class="src">secret.csv</span><br>候補座席が少ない人を先に（同数なら出勤時刻順）。候補の入力順＝優先順</li>
-    <li><b>3. 教官・OJT</b><span class="src">ojt.csv</span><br>教官+OJT一人目を同席、二人目は近くの席をペアで確保</li>
+    <li><b>0. 優先フラグ</b><span class="src">secret.csv</span><br>全ルール中の最優先。数値が小さい人から。同数値は「新人→教官・OJT→固定席→要サポート→その他」→出勤時刻順</li>
+    <li><b>1. 新人固定席</b><span class="src">rookie.csv</span><br>席5→10→6→11→7→12→8の順に上位7名（OPのみ）。8人目以降は通常の空席探索</li>
+    <li><b>2. 教官・OJT</b><span class="src">ojt.csv</span><br>教官+OJT一人目を同席、二人目は近くの席をペアで確保</li>
+    <li><b>3. 固定席</b><span class="src">secret.csv</span><br>候補座席が少ない人を先に（同数なら出勤時刻順）。候補の入力順＝優先順</li>
     <li><b>4. 要サポート</b><span class="src">secret.csv</span><br>並び順ルールは固定席と同じ</li>
-    <li class="alt"><b>5. 隣接禁止・禁止席の対象者（未配置の人）</b><span class="src">secret.csv</span><br>枝刈り付き<b>全探索（backtrack）</b>で「全員置ける組み合わせ」をすべて探し、偏りが少なく・勤務時間がぴったり接する同席が少ない案を自動採用。「本当は解けるのにあふれる」ことを防ぐ。1件も見つからない/制限時間（既定2秒）超過の時のみ出勤時刻順にフォールバック</li>
-    <li><b>6. その他スタッフ</b><br>出勤時刻が早い順に空席へ</li>
+    <li class="alt"><b>5. 隣接禁止の対象者（未配置の人）</b><span class="src">secret.csv</span><br>枝刈り付き<b>全探索（backtrack）</b>で「全員置ける組み合わせ」を探し、偏りが少なく・勤務時間がぴったり接する同席が少ない案を自動採用。「本当は解けるのにあふれる」ことを防ぐ。1件も見つからない/制限時間（1段階あたり5秒）超過の時のみ出勤時刻順にフォールバック</li>
+    <li><b>6. 禁止席だけの対象者</b><span class="src">secret.csv</span><br>隣接禁止が付いていない人。候補座席が少ない人から順に空席へ</li>
+    <li><b>7. その他スタッフ</b><br>出勤時刻が早い順に空席へ</li>
   </ol>
-  <p class="note">各段階で配置済みの人は後の段階では処理されません。指定席に置けなかった場合はメッセージを出して通常の空席探索へ。<b>夜勤のみ</b>、同列で隣接する座席を（他に候補がある限り）避けます。固定席などの都合で隣接するのは問題ありません。</p>
+  <div class="sidebox">
+    <b>解けないときは「隣接禁止」の順番を繰り上げて探し直します</b><br>
+    5番で1通りも見つからなかった場合、隣接禁止を1段階ずつ前へ動かして再探索します。<br>
+    ・段階1 … 要サポートより前<br>
+    ・段階2 … 固定席より前（<b>ここが上限</b>）<br>
+    優先フラグ・新人固定席・教官・OJTより前には動かしません。繰り上げで後回しになった固定席・要サポートは、本人の指定席をまず優先候補として試し、それでも無理なら指定席を外して隣接禁止を優先します（その場合はメッセージが出ます）。
+  </div>
+  <p class="note">各段階で配置済みの人は後の段階では処理されません。指定席に置けなかった場合はメッセージを出して通常の空席探索へ。<b>夜勤のみ</b>、同列で上下に隣接する座席を（他に候補がある限り）避けます（隣接禁止の「全方向」とは別の、ゆるやかな回避です）。固定席などの都合で隣接するのは問題ありません。</p>
 </section>
 
 <section>
   <h2 id="sec-buttons">ボタンと注意点<span class="back-to-toc">（<a href="#toc">▲ 目次</a>）</span></h2>
   <table>
     <tr><th>ボタン</th><th>動作</th></tr>
-    <tr><td>次の案</td><td>backtrackで見つかった別案（最大20件）へ切替。隣接禁止・禁止席対象者以外の座席は変わらない。実行可能な案が1通りだけの日は押せない</td></tr>
-    <tr><td>その他の座席をシャッフル</td><td>隣接禁止・禁止席対象者はそのまま、その他スタッフの座席だけランダムに振り直し</td></tr>
+    <tr><td>配置条件を満たす<br>別案を表示</td><td>backtrackで見つかった別案（最大99件）へ順に切替。押すたびに、禁止席だけの対象者とその他スタッフも合わせて振り直す。最後まで行くと候補1へ戻る。実行可能な案が1通りだけの日は押せない</td></tr>
+    <tr><td>最良に戻す</td><td>候補1（いちばん良いと判定された案）へ1クリックで戻る。候補1を表示中は押せない</td></tr>
+    <tr><td>一部シャッフル</td><td>隣接禁止・固定席・要サポート・教官OJT・新人固定席の座席はそのまま、禁止席だけの対象者とその他スタッフの座席をランダムに振り直し</td></tr>
     <tr><td>手動変更後 配置違反チェック</td><td>ドラッグ操作はルールを自動チェックしないため、手動調整後に実行。座席ルールに加え、日勤・夜勤の入れ違いや夜勤GL枠の空きも検出。教官・OJT本人同士の時間重複同席は違反にならず、OJT+臨時教官は確認メッセージのみ</td></tr>
     <tr><td>印刷する</td><td>座席表の日付を確認する画面が出る（OKでそのまま印刷プレビューまで進む。1ページ目=日勤、2ページ目=夜勤のA4各1枚・両面コピー用）</td></tr>
     <tr><td>現在の配置を保存 / 読み込む</td><td>表示中の配置（手動調整含む）をJSONでダウンロード / 復元</td></tr>
   </table>
   <div class="warncard">
-    <b>「次の案」「シャッフル」は、押した時点までの手動調整を上書きします。</b>ボタンを押した後でも手動調整は通常どおり行えますが、押すたびにそれまでの調整が失われるため、案を決めてから手動で微調整するのがおすすめです（座席が変わった人のカードは一瞬光ります）。
+    <b>「別案を表示」「最良に戻す」「一部シャッフル」は、押した時点までの手動調整を上書きします。</b>ボタンを押した後でも手動調整は通常どおり行えますが、押すたびにそれまでの調整が失われるため、案を決めてから手動で微調整するのがおすすめです（座席が変わった人のカードは一瞬光ります）。
+  </div>
+  <div class="sidebox">
+    <b>候補欄の「候補 3 / 12」とその下のラベル</b><br>
+    候補は良い順に並んでいます。下のラベルは、いま見ている案が先頭の案と比べてどうかを示します。<br>
+    ・<b>最良グループ（○件）</b> … 先頭の案と同じ評価。この中はどれを選んでも構いません<br>
+    ・<b>境界同席が○件多い案</b> … 交代時刻がぴったり接する同席が、その件数だけ多い（入れ替わりに時間がかかります）<br>
+    ・<b>指定席どおりでない方が○名</b> … 繰り上げが起きた日に出ることがあります<br>
+    劣る案も隠さずに表示しています。ラベルが変わったところが境目なので、行き過ぎたら「最良に戻す」で戻れます。<br>
+    <b>実行可能な配置が多い日は、集めた99件すべてが同じ評価になり、ラベルはずっと「最良グループ（99件）」のままになります。</b>ラベルが変化するのは、実行可能な案が少ない日や繰り上げが起きた日です。
+  </div>
+  <div class="sidebox">
+    <b>メッセージ欄の「○通り見つけました」の読みかた</b><br>
+    ・<b>32通り見つけました</b> … 探索し尽くした結果、実行可能な配置がちょうど32通りだった<br>
+    ・<b>99通り以上見つけました</b> … 99通りまで集めた時点でまだ他にもあったため、そこで打ち切った<br>
+    ・<b>47通り見つけたところで、探索の制限時間（5秒）になりました</b> … 時間切れ。表示している案は使えますが、これ以外にも案がある可能性があります
   </div>
   <div class="warncard">
-    <b>保存ファイルに secret.csv・ojt.csv 由来の情報は含まれません</b>（固定席・禁止席・教官/OJTなどのバッジ情報を含む）。読み込み後にバッジ表示や違反チェックを使うには、両CSVを読み込み直してください（同じセッションで読み込み済みなら自動適用）。
+    <b>保存ファイルに secret.csv 由来の情報は含まれません</b>（固定席・禁止席・要サポート・隣禁止・優先フラグ・夜勤GL席のバッジ情報）。読み込み後にこれらのバッジ表示や違反チェックを使うには、secret.csv を読み込み直してください（同じセッションで読み込み済みなら自動適用）。<br>
+    <b>新人（rookie.csv）と教官・OJT（ojt.csv）のバッジ情報は保存ファイルに含まれます。</b>これらは配置の制約を推測させる情報ではないため例外扱いで、rookie.csv・ojt.csv を読み込んでいない環境で保存ファイルを開いてもバッジが失われません。<b>ojt.csv が未読み込みのまま読み込んだ場合は、保存ファイルが持っている教官・OJTの情報がそのまま維持されます</b>（読み込み済みなら、そのojt.csvの内容で付け直されます）。
   </div>
 </section>
 
@@ -423,7 +451,7 @@ small,.note{color:var(--muted);}
   <table>
     <tr><th>ファイル</th><th>必須</th><th>役割</th><th>列</th></tr>
     <tr><td><span class="bdg b-fix">月間シフトCSV</span></td><td><span class="chip req">必須</span></td><td>その月の全出勤情報</td><td>日付, 氏名, 開始時刻, 終了時刻, 前残業, 後残業, 役割</td></tr>
-    <tr><td><span class="bdg b-rookie">rookie.csv</span></td><td><span class="chip opt">任意</span></td><td>新人の固定席（席5〜8）</td><td>氏名, 新人度合い</td></tr>
+    <tr><td><span class="bdg b-rookie">rookie.csv</span></td><td><span class="chip opt">任意</span></td><td>新人の固定席（席5→10→6→11→7→12→8）</td><td>氏名, 新人度合い</td></tr>
     <tr><td><span class="bdg b-lock">secret.csv</span></td><td><span class="chip opt">任意</span></td><td>禁止席・固定席・要サポート・隣接禁止・優先フラグ</td><td>種別, 対象1, 対象2, 対象座席, 優先フラグ</td></tr>
     <tr><td><span class="bdg b-ojt">ojt.csv</span></td><td><span class="chip opt">任意</span></td><td>教官とOJT対象者の同席</td><td>教官名, OJT一人目, OJT二人目, 対象座席</td></tr>
   </table>
@@ -480,11 +508,11 @@ small,.note{color:var(--muted);}
         <figure>
           <table class="smap mini">
             <tr><td></td><td class="hl-g">5</td><td></td><td></td></tr>
-            <tr><td></td><td class="hl-g">6</td><td></td><td></td></tr>
-            <tr><td></td><td class="hl-g">7</td><td></td><td></td></tr>
-            <tr><td></td><td class="hl-g">8</td><td class="void" style="border:none"></td><td class="void" style="border:none"></td></tr>
+            <tr><td></td><td class="hl-g">6</td><td class="hl-g">10</td><td></td></tr>
+            <tr><td></td><td class="hl-g">7</td><td class="hl-g">11</td><td></td></tr>
+            <tr><td></td><td class="hl-g">8</td><td class="hl-g">12</td><td class="void" style="border:none"></td></tr>
           </table>
-          <figcaption>新人度合いが小さい順に 5→6→7→8 へ上から詰める（最大4名。5人目以降は通常配置）</figcaption>
+          <figcaption>新人度合いが小さい順に <b>5→10→6→11→7→12→8</b>（最大7名。8人目以降は通常配置）</figcaption>
         </figure>
       </div>
     </div>
@@ -504,7 +532,7 @@ small,.note{color:var(--muted);}
       </table>
       <table>
         <tr><th>種別</th><th>意味</th><th>書きかた</th></tr>
-        <tr><td>隣接禁止</td><td>対象1と対象2を同じ列の隣の席にしない</td><td>対象2に相手の氏名。<b>同じ人を複数行に書いてもよい</b></td></tr>
+        <tr><td>隣接禁止</td><td>対象1と対象2を、<b>上下・左右・斜め</b>のとなり合う席にしない（例: 座席1のとなりは 2・5・6）</td><td>対象2に相手の氏名。<b>同じ人を複数行に書いてもよい</b></td></tr>
         <tr><td>禁止席</td><td>対象座席には配置しない</td><td rowspan="3">対象2は空欄。対象座席は半角数字をスペース区切りで（例 <code>7 11</code> → 7を優先、空いていなければ11）。<b>1人1行にまとめる</b>（同じ人・同じ種別が2行以上あると自動配置が実行できない）</td></tr>
         <tr><td>固定席</td><td>対象座席に必ず配置する</td></tr>
         <tr><td>要サポート</td><td>独り立ち前のスタッフ（<span class="bdg b-sup">要サポ</span>バッジ）。ルールは固定席と同じ</td></tr>
@@ -537,17 +565,18 @@ small,.note{color:var(--muted);}
             <tr><td></td><td></td><td></td><td class="hl-p">15</td></tr>
             <tr><td class="hl-p">4</td><td class="hl-p">8</td><td class="hl-p">12</td><td class="void">×</td></tr>
           </table>
-          <figcaption>同席座席の既定順は 15→12→8→4→他。対象座席を書くとその席が先頭に（<code>12 4</code> → 12→4→15→8→他）。座席9番は既定順・「他」には現れないが、対象座席に明示的に9と書けば候補になる（教官1名+OJT1名の同席のみ。ペア配置では対象外のまま）</figcaption>
+          <figcaption>同席座席の既定順は 15→12→8→4→3→2→1→他。対象座席を書くとその席が先頭に（<code>12 4</code> → 12→4→15→8→3→2→1→他）。座席9番は既定順・「他」には現れないが、対象座席に明示的に9と書けば候補になる（教官1名+OJT1名の同席のみ。ペア配置では対象外のまま）</figcaption>
         </figure>
       </div>
       <table>
         <tr><th>項目</th><th>ルール</th></tr>
         <tr><td>行のつくり</td><td>教官1名につき1行（同じ教官が複数行にまたがるとエラー）。OJT一人目は必須、二人目は空欄可</td></tr>
-        <tr><td>教官1名+OJT1名<br>のデフォルト席</td><td>対象座席を指定しない場合、<strong>15番→12番→8番→4番→他</strong>の順に空席を探し、最初に見つかった座席へ2人まとめて同席（この組み合わせに限り勤務時間が重なっても可）</td></tr>
-        <tr><td>教官1名+OJT2名<br>のデフォルト席</td><td>対象座席を指定しない場合、(教官+一人目,二人目) の組を<br><strong>(15,14)→(12,8)→(12,11)→(8,7)→(4,3)→(11,7)→(11,10)→(7,6)→(3,2)→(14,13)→(10,6)→(6,5)→(2,1)</strong><br>の順で試し、両方空いていた最初の組を採用（座席9番はどの組にも現れないため、13通りすべて埋まっていれば3名を個別に通常の空席探索で配置する）</td></tr>
-        <tr><td>混在時<br>のデフォルト席</td><td>OJT2名側を上記の順で先に確定 → OJT1名側は既定順（15→12→8→4→他）で空きがなければ、OJT2名側が使った座席の「同列1つ前」を追加候補に（例: 12&amp;8番なら11番・7番）</td></tr>
+        <tr><td>教官1名+OJT1名<br>のデフォルト席</td><td>対象座席を指定しない場合、<strong>15番→12番→8番→4番→3番→2番→1番→他</strong>の順に空席を探し、最初に見つかった座席へ2人まとめて同席（この組み合わせに限り勤務時間が重なっても可）</td></tr>
+        <tr><td>教官1名+OJT2名<br>のデフォルト席</td><td>対象座席を指定しない場合、(教官+一人目,二人目) の組を<br><strong>(12,8)→(12,15)→(15,14)→(4,3)→(3,2)→(2,1)</strong><br>の順で試し、両方空いていた最初の組を採用。ここまでで見つからないときだけ、最終手段として<br><strong>(12,11)→(8,7)→(11,10)→(7,6)→(6,5)→(14,13)</strong><br>も試す（座席9番はどの組にも現れないため、12通りすべて埋まっていれば3名を個別に通常の空席探索で配置する）。対象座席で15を12より先に指定した教官だけ、(15,14) を先に試す</td></tr>
+        <tr><td>混在時<br>のデフォルト席</td><td>OJT2名側を上記の順で先に確定 → OJT1名側は既定順（15→12→8→4→3→2→1→他）で空席を探す</td></tr>
+    <tr><td>教官2名・OJT2名<br>のとき</td><td>ojt.csv上は「片方の教官がOJT2名を担当・もう片方は担当なし」でも、<b>自動的に教官1名+OJT1名ずつの組み合わせに組み替えて配置します</b>（メッセージで知らせます）</td></tr>
         <tr><td>担当教官が不在</td><td>担当人数に空きのある他教官へ自動振替。振替先がなければOJT対象者のみで配置しメッセージ表示 → 臨時の教官役を手動で同じ席へドラッグ（違反チェックでは確認メッセージのみ）</td></tr>
-        <tr><td>補足</td><td>教官が役席・GLでも担当OJTが出勤する日は座席グリッド側へ。OJT対象者が新人上位4名を兼ねる場合は新人固定席が優先され同席しない</td></tr>
+        <tr><td>補足</td><td>教官が役席・GLでも担当OJTが出勤する日は座席グリッド側へ。OJT対象者が新人固定席の対象（上位7名）を兼ねる場合は新人固定席が優先され同席しない</td></tr>
       </table>
     </div>
   </div>
