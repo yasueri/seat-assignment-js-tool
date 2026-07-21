@@ -15,18 +15,31 @@
     SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
     buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat, buildOjtIndexes,
-    assignSeatsExhaustive, reshuffleOthers,
+    assignSeatsWithEscalation, reshuffleForbiddenAndOthers, ADJACENT_ESCALATION_MAX_LEVEL,
   } = NS.algorithm;
 
   const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
   const LEADER_ROWS = [1, 2], LEADER_COLS = [1, 2, 3];
 
   // ■2（全探索backtrack）を「自動配置を実行」の都度、日勤・夜勤それぞれで走らせる際の設定。
-  // 隣接禁止・禁止席対象者は通常少人数のはずで、実運用では一瞬で解が
-  // 出る想定のため、タイムアウトは短め（2秒）にしてある。解けた場合は「次の案」ボタンで
+  // ver4.11から、隣接禁止の条件を満たせない場合は隣接禁止の優先順位を1段階ずつ
+  // 繰り上げて再探索する（assignSeatsWithEscalation。優先フラグの直後＝段階4まで）。
+  // タイムアウト（10秒）は「1段階あたり」の制限時間で、時間切れの段階があっても
+  // 次の段階へ進む。隣接禁止対象者は通常少人数のはずで、実運用では各段階とも
+  // 一瞬で結果が出る想定。解けた場合は「次の案」「一部シャッフル」ボタンで
   // 上位EXHAUSTIVE_MAX_SOLUTIONS件まで順番に見られる。
   const EXHAUSTIVE_MAX_SOLUTIONS = 20;
-  const EXHAUSTIVE_TIME_BUDGET_MS = 2000;
+  const EXHAUSTIVE_TIME_BUDGET_MS = 10000;
+
+  // 繰り上げ段階ごとの配置順（メッセージ表示用。algorithm.jsのADJACENT_ESCALATION_MAX_LEVEL
+  // 付近のコメントと対応。添字＝段階）
+  const ESCALATION_ORDER_LABELS = [
+    '優先フラグ → 新人固定席 → 固定席 → 教官・OJT → 要サポート → 隣接禁止 → 禁止席のみの対象者 → その他',
+    '優先フラグ → 新人固定席 → 固定席 → 教官・OJT → 隣接禁止 → 要サポート → 禁止席のみの対象者 → その他',
+    '優先フラグ → 新人固定席 → 固定席 → 隣接禁止 → 教官・OJT → 要サポート → 禁止席のみの対象者 → その他',
+    '優先フラグ → 新人固定席 → 隣接禁止 → 固定席 → 教官・OJT → 要サポート → 禁止席のみの対象者 → その他',
+    '優先フラグ → 隣接禁止 → 新人固定席 → 固定席 → 教官・OJT → 要サポート → 禁止席のみの対象者 → その他',
+  ];
 
   // ---------- 表示用ヘルパー ----------
   // 座席番号の配列を、1〜2件なら番号を、3件以上なら「複数有」を返す（バッジ表示用）
@@ -63,7 +76,7 @@
     ojtRows: null, ojtIndexes: null,
     // ■2（全探索backtrack）の結果（ver4.8で追加）。「自動配置を実行」のたびに作り直す。
     // { feasible, timedOut, totalSolutionsFound, solutions:[...], bestPartial, context, index }
-    // 保存データの読み込み時や、隣接禁止・禁止席対象者が0名などで解が1件しかない場合はnull。
+    // 保存データの読み込み時や、隣接禁止対象者が0名などで解が1件しかない場合はnull。
     dayExhaustive: null, nightExhaustive: null,
   };
   let dragSource = null;
@@ -170,7 +183,7 @@
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
     // ■2の候補は旧secret.csvの内容で計算済みのため、ここでは無効化する
-    // （「次の案」ボタンを押すと矛盾した内容になってしまうため）
+    // （「次の案」「一部シャッフル」ボタンを押すと矛盾した内容になってしまうため）
     appState.dayExhaustive = null;
     appState.nightExhaustive = null;
     reapplyBadges();
@@ -368,38 +381,50 @@
   }
 
   // ---------- 自動配置の実行 ----------
-  // ■2（全探索backtrack）の結果から、従来の assignSeats と同じ形（{state, overflow, logs}）を
-  // 作る。解けた場合はスコア最上位の解を採用し、そうでない場合は greedyFallback()
+  // ■2（全探索backtrack＋繰り上げ再探索）の結果から、従来の assignSeats と同じ形
+  // （{state, overflow, logs}）を作る。解けた場合はスコア最上位の解を採用し、
+  // どの段階でも解けなかった場合は greedyFallback()
   // （＝従来の貪欲+MRV assignSeats）の結果を使う。どちらの場合も、状況を allLogs に積む。
   // labelPrefix: '日勤' | '夜勤'（メッセージの見出し用）
   function buildSeatResultFromExhaustive(exhaustiveResult, labelPrefix, greedyFallback, allLogs) {
     if (exhaustiveResult.feasible && exhaustiveResult.solutions.length > 0) {
+      const level = exhaustiveResult.escalationLevel || 0;
+      // 繰り上げが発動した場合は、通常の優先順位では解けなかったこと・今回の配置順・
+      // 後回しになったルールの指定どおりに配置できていない可能性があることを知らせる
+      if (level > 0) {
+        allLogs.push({
+          level: 'warn', showDialog: true,
+          message: `【${labelPrefix}】通常の優先順位では隣接禁止の条件を満たす配置が見つからなかったため、隣接禁止の優先順位を${level}段階繰り上げて配置しました（今回の配置順: ${ESCALATION_ORDER_LABELS[level] || ESCALATION_ORDER_LABELS[ESCALATION_ORDER_LABELS.length - 1]}）。繰り上げにより後回しになったルール（固定席・要サポート等）の指定どおりに配置できていない方がいる可能性があるため、メッセージと座席表をご確認ください。`,
+        });
+      }
       const best = exhaustiveResult.solutions[0];
       const onlyOneSolution = exhaustiveResult.totalSolutionsFound === 1;
       const solutionWord = exhaustiveResult.totalSolutionsFound >= EXHAUSTIVE_MAX_SOLUTIONS
         ? `${exhaustiveResult.totalSolutionsFound}通り以上`
         : `${exhaustiveResult.totalSolutionsFound}通り`;
-      // 実行可能な配置が1通りしかない場合は、複数の案から選んで採用したわけではなく、
-      // 「次の案」に切り替えられる他の案も存在しないため、「最も良さそうな案を採用して
-      // います」も「次の案ボタンで切り替えられます」の案内も付けない
+      // 実行可能な配置が1通りしかない場合（隣接禁止側の案を切り替える余地がない場合）は
+      // 「次の案」を案内せず、「一部シャッフル」（禁止席のみの対象者・その他側は
+      // ランダムに配置し直せる）のみ案内する
       const message = onlyOneSolution
-        ? `【${labelPrefix}】隣接禁止・禁止席対象者について全探索を行い、実行可能な配置を${solutionWord}見つけました。`
-        : `【${labelPrefix}】隣接禁止・禁止席対象者について全探索を行い、実行可能な配置を${solutionWord}見つけました。最も良さそうな案を採用しています（「次の案」ボタンで他の案に切り替えられます）。`;
+        ? `【${labelPrefix}】隣接禁止対象者について全探索を行い、実行可能な配置を${solutionWord}見つけました。（「一部シャッフル」ボタンで禁止席対象者・その他スタッフの配置を変更できます）。`
+        : `【${labelPrefix}】隣接禁止対象者について全探索を行い、実行可能な配置を${solutionWord}見つけました。最も良さそうな案を採用しています（「次の案」ボタンで他の案に切り替えられます）。`;
       allLogs.push({ level: 'info', message });
       return { state: best.state, overflow: best.overflow, logs: best.logs };
     }
-    // 解けなかった場合（証明つきで解なし、またはタイムアウト）は従来の貪欲+MRVにフォールバックする
-    if (exhaustiveResult.timedOut) {
-      allLogs.push({
-        level: 'warn',
-        message: `【${labelPrefix}】隣接禁止・禁止席対象者についての全探索が制限時間内に終わらなかったため、通常の配置方法（貪欲法）で配置しました。`,
-      });
-    } else if (exhaustiveResult.bestPartial) {
-      allLogs.push({
-        level: 'warn', showDialog: true,
-        message: `【${labelPrefix}】隣接禁止・禁止席対象者を全員配置できる組み合わせが見つかりませんでした（最も惜しい組み合わせでも配置できなかった対象者: ${exhaustiveResult.bestPartial.unplacedNames.join('、')}さん）。通常の配置方法で処理します。secret.csvの条件を確認してください。`,
-      });
-    }
+    // どの段階でも解けなかった場合（証明つきで解なし、またはタイムアウト）は
+    // 従来の貪欲+MRVにフォールバックする
+    const attempts = exhaustiveResult.attempts || [];
+    const timedOutAny = attempts.some(a => a.timedOut) || exhaustiveResult.timedOut;
+    const timeoutNote = timedOutAny
+      ? '（一部の段階は制限時間10秒で探索を打ち切ったため、「本当に解なし」と証明できたわけではありません）'
+      : '';
+    const partialNote = exhaustiveResult.bestPartial
+      ? `最も惜しい組み合わせでも配置できなかった対象者: ${exhaustiveResult.bestPartial.unplacedNames.join('、')}さん。`
+      : '';
+    allLogs.push({
+      level: 'warn', showDialog: true,
+      message: `【${labelPrefix}】隣接禁止の優先順位を優先フラグの直後（段階4）まで繰り上げて探索しても、隣接禁止対象者全員を配置できる組み合わせが見つかりませんでした${timeoutNote}。${partialNote}通常の配置方法（貪欲法。優先フラグの直後に隣接禁止を配置する順序）で処理します。secret.csvの条件を確認してください。`,
+    });
     return greedyFallback();
   }
 
@@ -463,17 +488,23 @@
     const calcStartTime = performance.now();
 
     // --- 日勤 ---
-    // 教官・OJT（固定席の次・新人固定席より前の優先順位）は assignSeats / assignSeatsExhaustive 内で処理する。
-    // 隣接禁止・禁止席対象者の配置は、ver4.8からまず■2（全探索backtrack）で
-    // 解けるかどうかを試す。解けた場合はその最良解（スコア最上位）を採用し、解が
-    // 証明つきで存在しない場合・制限時間内に見つからなかった場合のみ、従来の
-    // 貪欲+MRV（assignSeats）にフォールバックする。
-    const dayExhaustiveResult = assignSeatsExhaustive(opRows, rookieParsed.rows, secretParsed.rows, {
+    // 教官・OJT（固定席の次・新人固定席より前の優先順位）は assignSeats / assignSeatsWithEscalation 内で処理する。
+    // 隣接禁止対象者の配置は、まず■2（全探索backtrack）で解けるかどうかを試す。
+    // ver4.11から、通常の優先順位（段階0）で解けない場合は隣接禁止の優先順位を
+    // 1段階ずつ繰り上げて再探索する（優先フラグの直後＝段階4まで。優先フラグは
+    // 常に最優先のまま）。いずれかの段階で解けた場合はその最良解（スコア最上位）を
+    // 採用し、どの段階でも解けなかった場合のみ、従来の貪欲+MRV（assignSeats）に
+    // フォールバックする。
+    const dayExhaustiveResult = assignSeatsWithEscalation(opRows, rookieParsed.rows, secretParsed.rows, {
       ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS, timeBudgetMs: EXHAUSTIVE_TIME_BUDGET_MS,
     });
     const seatResult = buildSeatResultFromExhaustive(
       dayExhaustiveResult, '日勤',
-      () => assignSeats(opRows, rookieParsed.rows, secretParsed.rows, { ojtRows: ojtParsed.rows }),
+      // どの段階でも解けなかった場合の最終フォールバック。ver4.13から、
+      // 第四段階（優先フラグの直後に隣接禁止）の優先順位で貪欲配置する
+      // （繰り上げの最終段階を尊重するため。ADJACENT_ESCALATION_MAX_LEVEL参照）
+      () => assignSeats(opRows, rookieParsed.rows, secretParsed.rows,
+        { ojtRows: ojtParsed.rows, adjacentEscalationLevel: ADJACENT_ESCALATION_MAX_LEVEL }),
       allLogs,
     );
     appState.dayExhaustive = (dayExhaustiveResult.feasible && dayExhaustiveResult.solutions.length > 0)
@@ -502,12 +533,15 @@
     //    隣接するのは許容）。座席側に回った「夜勤GL席」指定者にはバッジが付く。
     //    夜勤は教官・OJTの役席・GL振り替え（splitDayRows側の分岐）は行わないが、
     //    OP同士の教官・OJTペア自体はここでも同じロジックが動く（実害はない前提）。
-    //    隣接禁止・禁止席対象者の配置は日勤と同様、まず■2（全探索backtrack）を試す。
+    //    隣接禁止対象者の配置は日勤と同様、まず■2（全探索backtrack）を試し、
+    //    解けない場合は隣接禁止の優先順位を繰り上げて再探索する（ver4.11）。
     const nightExhaustiveOptions = { nightContext: true, ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS, timeBudgetMs: EXHAUSTIVE_TIME_BUDGET_MS };
-    const nightExhaustiveResult = assignSeatsExhaustive(nightSeatRows, rookieParsed.rows, nightSecretRows, nightExhaustiveOptions);
+    const nightExhaustiveResult = assignSeatsWithEscalation(nightSeatRows, rookieParsed.rows, nightSecretRows, nightExhaustiveOptions);
     const nightResult = buildSeatResultFromExhaustive(
       nightExhaustiveResult, '夜勤',
-      () => assignSeats(nightSeatRows, rookieParsed.rows, nightSecretRows, { nightContext: true, ojtRows: ojtParsed.rows }),
+      // 日勤と同様、最終フォールバックは第四段階の優先順位で貪欲配置する
+      () => assignSeats(nightSeatRows, rookieParsed.rows, nightSecretRows,
+        { nightContext: true, ojtRows: ojtParsed.rows, adjacentEscalationLevel: ADJACENT_ESCALATION_MAX_LEVEL }),
       allLogs,
     );
     appState.nightExhaustive = (nightExhaustiveResult.feasible && nightExhaustiveResult.solutions.length > 0)
@@ -567,14 +601,16 @@
   // 氏名を手入力で変更したとき、secret.csvのルール（固定席・禁止席・隣接禁止・要サポート）を
   // 新しい氏名で判定し直してバッジ用の情報を作る（新人バッジは対象外。自動配置時の
   // 優先度に基づくもので、手入力の変更で再判定する性質のものではないため）。
-  function deriveBadgeFields(name) {
+  // existing（省略可）: 教官・OJTバッジをojt.csv未読み込み時に維持するための、
+  // 変更前の人物オブジェクト。deriveOjtBadgeFields参照。
+  function deriveBadgeFields(name, existing) {
     const idx = appState.ruleIndexes;
     if (!idx) {
       return {
         hasAdjacentRule: false, hasForbiddenSeatRule: false, isDesignated: false,
         designatedSeatNumbers: [], forbiddenSeatNumbers: [], adjacentGroupLetter: null,
         isSupport: false, supportSeatNumbers: [],
-        ...deriveOjtBadgeFields(name),
+        ...deriveOjtBadgeFields(name, existing),
       };
     }
     const letters = appState.adjacentGroupLetters;
@@ -587,21 +623,37 @@
       adjacentGroupLetter: (letters && letters.get(name)) || null,
       isSupport: idx.supportNames.has(name),
       supportSeatNumbers: (idx.supportSeatsMap.get(name) || []).map(numberOfKey),
-      ...deriveOjtBadgeFields(name),
+      ...deriveOjtBadgeFields(name, existing),
     };
   }
 
   // ojt.csv（教官・OJT）由来のバッジ情報を、現在のappState.ojtIndexesから作る。
-  // ojt.csvが未読み込みの場合はすべてfalse/nullになる。
-  function deriveOjtBadgeFields(name) {
+  // ojt.csvが読み込まれている場合は、常にそこから最新の状態を計算する
+  // （氏名を手入力で変更した場合の再判定や、ojt.csv再読み込み時の更新はこちら）。
+  // ojt.csvが未読み込みの場合、existing（変更前の人物オブジェクト）が渡されていれば
+  // その教官・OJTバッジ情報をそのまま維持する（ver4.14。保存データの読み込み時に、
+  // 保存ファイル自身が持つ教官・OJT情報を消してしまわないようにするため。新人固定席の
+  // isRookie/rookieRankと同様の扱い）。existingが渡されていない場合（氏名を手入力で
+  // 変更した直後など）はfalse/nullにする。
+  function deriveOjtBadgeFields(name, existing) {
     const idx = appState.ojtIndexes;
-    if (!idx) return { isOjtMentor: false, isOjtTrainee: false, ojtMentorName: null, ojtTraineeNames: [] };
-    return {
-      isOjtMentor: idx.isMentor.has(name),
-      isOjtTrainee: idx.isTrainee.has(name),
-      ojtMentorName: idx.mentorOf.get(name) || null,
-      ojtTraineeNames: idx.traineesOf.get(name) || [],
-    };
+    if (idx) {
+      return {
+        isOjtMentor: idx.isMentor.has(name),
+        isOjtTrainee: idx.isTrainee.has(name),
+        ojtMentorName: idx.mentorOf.get(name) || null,
+        ojtTraineeNames: idx.traineesOf.get(name) || [],
+      };
+    }
+    if (existing) {
+      return {
+        isOjtMentor: !!existing.isOjtMentor,
+        isOjtTrainee: !!existing.isOjtTrainee,
+        ojtMentorName: existing.ojtMentorName || null,
+        ojtTraineeNames: Array.isArray(existing.ojtTraineeNames) ? existing.ojtTraineeNames : [],
+      };
+    }
+    return { isOjtMentor: false, isOjtTrainee: false, ojtMentorName: null, ojtTraineeNames: [] };
   }
 
   // 指定した位置以外に、同じ氏名の人がすでにいないか確認する（手入力での重複防止）。
@@ -695,7 +747,7 @@
     return span;
   }
 
-  // highlighted=true のとき、■2の「次の案」「その他だけシャッフル」ボタンで
+  // highlighted=true のとき、■2の「次の案」「一部シャッフル」ボタンで
   // このカードの人が直前の表示から座席を変えたことを示す、一瞬光るハイライトを付ける
   // （CSS側のアニメーションで数秒かけて自然に消える。状態としては保持しない）。
   function createPersonCard(loc, person, highlighted) {
@@ -748,7 +800,7 @@
       badges.appendChild(makeBadge('lock', '禁止席', label));
     }
     if (person.hasAdjacentRule) {
-      badges.appendChild(makeBadge('lock', '隣禁止', person.adjacentGroupLetter || ''));
+      badges.appendChild(makeBadge('adjacent', '隣禁止', person.adjacentGroupLetter || ''));
     }
     if (person.hasNightGLDesignation) {
       badges.appendChild(makeBadge('designated', '夜勤', 'GL席'));
@@ -988,7 +1040,7 @@
 
   // 座席グリッド（全15席）を描画する。日勤（locType='seat'）と夜勤（locType='nightSeat'）で共用。
   // changedNames が渡された場合、そこに含まれる氏名のカードにハイライトを付ける
-  // （■2の「次の案」「その他だけシャッフル」ボタンで直前と座席が変わった人を示す）。
+  // （■2の「次の案」「一部シャッフル」ボタンで直前と座席が変わった人を示す）。
   function renderSeatGrid(gridEl, locType, changedNames) {
     const grid = gridEl;
     grid.innerHTML = '';
@@ -1076,8 +1128,8 @@
     els.nightDateLabel.textContent = suffix;
   }
 
-  // dayChangedNames / nightChangedNames（省略可、Set<string>）: ■2の「次の案」
-  // 「その他だけシャッフル」ボタンから呼ばれたときだけ渡される。渡された氏名の
+  // dayChangedNames / nightChangedNames（省略可、Set<string>）: ■2の
+  // 「次の案」「一部シャッフル」ボタンから呼ばれたときだけ渡される。渡された氏名の
   // カードに一瞬ハイライトを付ける（ドラッグ操作や✎編集など、それ以外からの
   // render()呼び出しでは何も渡さないため、ハイライトは付かない）。
   function render(dayChangedNames, nightChangedNames) {
@@ -1106,7 +1158,7 @@
   }
 
   // 2つの座席表を比べて、座席が変わった（またはあふれに落ちた/あふれから復帰した）
-  // 人の氏名の集合を返す。■2の「次の案」「その他だけシャッフル」ボタンで、
+  // 人の氏名の集合を返す。■2の「次の案」「一部シャッフル」ボタンで、
   // 直前の表示と比べて何が変わったかを示すために使う。
   function diffChangedNames(prevState, nextState) {
     const prev = collectSeatAssignments(prevState);
@@ -1123,9 +1175,12 @@
 
   // 候補パネル（日勤 or 夜勤）の表示を更新する。exがnull（■2が解けなかった/
   // まだ自動配置していない/保存データを読み込んだ直後）ならパネルごと隠す。
-  // 「次の案」「その他の座席をシャッフル」で座席が変わった人は、候補欄の下に
-  // 氏名を列挙するのではなく、座席カード自体を一瞬光らせて知らせる
-  // （changedNamesの利用先はrenderSeatGrid/renderOverflow側のハイライトのみ）。
+  // 「次の案」は隣接禁止対象者側の候補が1件しかない場合は押しても意味がないため
+  // 無効化する。「一部シャッフル」は候補数によらず常に押せる（禁止席・その他側の
+  // ランダム配置し直しには、候補が1件しかない場合でも意味があるため）。
+  // 座席が変わった人は、候補欄の下に氏名を列挙するのではなく、座席カード自体を
+  // 一瞬光らせて知らせる（changedNamesの利用先はrenderSeatGrid/renderOverflow側の
+  // ハイライトのみ）。
   function renderCandidatePanel(prefix, ex) {
     const els2 = candidateEls[prefix];
     if (!els2 || !els2.inner) return;
@@ -1135,34 +1190,42 @@
     }
     els2.inner.hidden = false;
     els2.count.textContent = `候補 ${ex.index + 1} / ${ex.solutions.length}`;
-    els2.btnNext.disabled = ex.solutions.length <= 1;
+    if (els2.btnNext) els2.btnNext.disabled = ex.solutions.length <= 1;
   }
 
   // prefix: 'day' | 'night'。seatsKey/overflowKey: appState上のプロパティ名。
   function setupCandidateButtons(prefix, getEx, seatsKey, overflowKey) {
     const els2 = candidateEls[prefix];
-    if (!els2 || !els2.btnNext) return;
+    if (!els2 || !els2.btnNext || !els2.btnShuffle) return;
 
+    // 「次の案」ボタン（ver4.17。①隣接禁止対象者側の案を次の候補に進め、
+    // ②続けてその新しい案の上で禁止席のみの対象者とその他スタッフをランダムに
+    // 配置し直す、をセットで行う。候補が1件しかない場合はrenderCandidatePanelで
+    // 無効化されるため、ここに来る時点で必ず2件以上ある）。
     els2.btnNext.addEventListener('click', () => {
       const ex = getEx();
       if (!ex || ex.solutions.length <= 1) return;
       const prevState = appState[seatsKey];
       ex.index = (ex.index + 1) % ex.solutions.length;
-      const chosen = ex.solutions[ex.index];
-      appState[seatsKey] = chosen.state;
-      appState[overflowKey] = chosen.overflow;
+      const base = ex.solutions[ex.index];
+      const reshuffled = reshuffleForbiddenAndOthers(base, ex.context);
+      appState[seatsKey] = reshuffled.state;
+      appState[overflowKey] = reshuffled.overflow;
       editingLoc = null;
-      const changed = diffChangedNames(prevState, chosen.state);
+      const changed = diffChangedNames(prevState, reshuffled.state);
       if (prefix === 'day') render(changed, undefined);
       else render(undefined, changed);
     });
 
+    // 「一部シャッフル」ボタン（旧「シャッフル」。ver4.17で改称）: 隣接禁止対象者・
+    // 固定席・要サポート・教官OJT・新人固定席側の座席は変えず、禁止席のみの
+    // 対象者とその他スタッフだけをランダムに配置し直す。
     els2.btnShuffle.addEventListener('click', () => {
       const ex = getEx();
       if (!ex) return;
       const base = ex.solutions[ex.index];
       const prevState = appState[seatsKey];
-      const reshuffled = reshuffleOthers(base, ex.context);
+      const reshuffled = reshuffleForbiddenAndOthers(base, ex.context);
       appState[seatsKey] = reshuffled.state;
       appState[overflowKey] = reshuffled.overflow;
       editingLoc = null;
@@ -1380,6 +1443,11 @@
   // forbiddenSeatNumbers / hasAdjacentRule / hasForbiddenSeatRule /
   // adjacentGroupLetter / hasNightGLDesignation）は、保存ファイルから固定席・
   // 禁止席などの内容を推測できてしまうため、ここで確実に落とす。
+  // isRookie/rookieRank（新人固定席）と、isOjtMentor/isOjtTrainee/ojtMentorName/
+  // ojtTraineeNames（教官・OJT。ver4.14で追加）は例外として保存する。
+  // これらはsecret.csvの禁止席・隣接禁止のような「配置の制約」を推測させる
+  // 情報ではなく、rookie.csv/ojt.csvが読み込まれていない環境で保存データを
+  // 開いた場合にもバッジ表示が失われないようにするための情報のため。
   function exportPerson(p) {
     if (!p) return null;
     return {
@@ -1388,6 +1456,10 @@
       role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
       isRookie: !!p.isRookie,
       rookieRank: Number.isFinite(p.rookieRank) ? p.rookieRank : null,
+      isOjtMentor: !!p.isOjtMentor,
+      isOjtTrainee: !!p.isOjtTrainee,
+      ojtMentorName: typeof p.ojtMentorName === 'string' ? p.ojtMentorName : null,
+      ojtTraineeNames: Array.isArray(p.ojtTraineeNames) ? p.ojtTraineeNames.filter(n => typeof n === 'string') : [],
     };
   }
   function exportSeatState(state) {
@@ -1489,10 +1561,14 @@
 
   // 読み込み時の復元ヘルパー: 保存データ内の「1人分」を検証して復元する。
   // 保存してある項目だけを取り込むホワイトリスト方式のため、手を加えられた
-  // 保存ファイルに余計な項目が入っていてもここで確実に落とす（バッジ情報は
-  // 後段の reapplyBadges でsecret.csvから再計算する）。壊れているエントリは
-  // null（空席扱い）にして読み飛ばし、氏名が分かるものは brokenNames に集めて
-  // 警告に使う。
+  // 保存ファイルに余計な項目が入っていてもここで確実に落とす（secret.csv由来の
+  // バッジ情報は後段の reapplyBadges でsecret.csvから再計算する。
+  // isRookie/rookieRankと、isOjtMentor/isOjtTrainee/ojtMentorName/ojtTraineeNames
+  // 〈ver4.14で追加〉は保存データにそのまま含まれているため、ここでそのまま
+  // 取り込む。ojt.csvが読み込まれていればreapplyBadgesで最新の内容に更新され、
+  // 読み込まれていなければこの保存データの内容がそのまま使われる）。
+  // 壊れているエントリはnull（空席扱い）にして読み飛ばし、氏名が分かるものは
+  // brokenNamesに集めて警告に使う。
   function sanitizePerson(p, brokenNames) {
     if (!p || typeof p !== 'object') return null;
     const name = typeof p.name === 'string' ? p.name.trim() : '';
@@ -1511,6 +1587,10 @@
       role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
       isRookie: !!p.isRookie,
       rookieRank: Number.isFinite(p.rookieRank) ? p.rookieRank : null,
+      isOjtMentor: !!p.isOjtMentor,
+      isOjtTrainee: !!p.isOjtTrainee,
+      ojtMentorName: typeof p.ojtMentorName === 'string' ? p.ojtMentorName : null,
+      ojtTraineeNames: Array.isArray(p.ojtTraineeNames) ? p.ojtTraineeNames.filter(n => typeof n === 'string') : [],
     };
   }
 
@@ -1554,12 +1634,14 @@
       if (!p) return p;
       return {
         ...p,
-        ...deriveBadgeFields(p.name),
+        ...deriveBadgeFields(p.name, p),
         hasNightGLDesignation: isNightSide && nightGLNames.has(p.name),
       };
     };
     // ※ deriveBadgeFields は内部で deriveOjtBadgeFields も呼ぶため、
     // ojt.csv由来のisOjtMentor/isOjtTrainee等もここで一緒に再計算される
+    // （ojt.csvが未読み込みの場合は、pが持つ既存の教官・OJTバッジ情報を維持する。
+    // 保存データを読み込んだ直後は、保存ファイル自身が持つ情報がここに渡る）。
     for (const s of SEATS) {
       for (let i = 0; i < 2; i++) {
         appState.seats[s.key][i] = apply(appState.seats[s.key][i], false);
@@ -1631,7 +1713,7 @@
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
     appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
     // 保存データには■2（全探索backtrack）の候補情報は含まれないため、
-    // 読み込み時は候補パネルを非表示に戻す（「次の案」「その他だけシャッフル」ボタンは、
+    // 読み込み時は候補パネルを非表示に戻す（「次の案」「一部シャッフル」ボタンは、
     // 直前に「自動配置を実行」した内容にのみ対応しているため）。
     appState.dayExhaustive = null;
     appState.nightExhaustive = null;

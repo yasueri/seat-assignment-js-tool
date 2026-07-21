@@ -93,7 +93,7 @@
     <p>役席・GLの別枠（早番・遅番エリア／夜勤GL枠）を先に確定したあと、座席1〜15を次の順で配置します。</p>
     <p><strong>優先フラグ → 新人固定席 → 固定席 → 教官・OJT → 要サポート → 隣接禁止・禁止席の対象者（全探索） → その他のスタッフ（出勤時刻が早い順）</strong></p>
     <p>座席9番はどの段階でも自動配置の対象外です。指定席に配置できなかった場合は、メッセージを表示したうえで通常の空席探索にフォールバックします。</p>
-    <p class="manual-link">▶ 各段階のくわしいルールと「次の案」「シャッフル」ボタンは <a href="manual.html#sec-priority" target="_blank" rel="noopener">図解マニュアル「自動配置の順番（優先順位）」</a> を参照</p>
+    <p class="manual-link">▶ 各段階のくわしいルールと「シャッフル」ボタンは <a href="manual.html#sec-priority" target="_blank" rel="noopener">図解マニュアル「自動配置の順番（優先順位）」</a> を参照</p>
     </div>
   </details>
 </div>
@@ -154,8 +154,9 @@
       <div class="candidate-panel-inner" id="day-candidate-inner" hidden>
         <div class="candidate-count" id="day-candidate-count">候補 -/-</div>
         <div class="candidate-buttons">
-          <button type="button" class="candidate-btn multiline-btn" id="day-btn-next-pattern"><span>次の案</span><span class="candidate-btn-sub">（配慮対象者の座席）</span></button>
-          <button type="button" class="candidate-btn multiline-btn secondary" id="day-btn-shuffle-others"><span>その他の座席を</span><span>シャッフル</span></button>
+          <button type="button" class="candidate-btn multiline-btn" id="day-btn-next-pattern" title="配置条件を満たす
+　別案を表示　"><span>配置条件を満たす</span><span>別案を表示</span></button>
+          <button type="button" class="candidate-btn multiline-btn secondary" id="day-btn-shuffle-others" title="禁止席対象者と条件指定の無いスタッフをシャッフル"><span>一部シャッフル</span><span class="candidate-btn-sub">（詳細はマウスオーバー）</span></button>
         </div>
       </div>
     </div>
@@ -210,8 +211,9 @@
       <div class="candidate-panel-inner" id="night-candidate-inner" hidden>
         <div class="candidate-count" id="night-candidate-count">候補 -/-</div>
         <div class="candidate-buttons">
-          <button type="button" class="candidate-btn multiline-btn" id="night-btn-next-pattern"><span>次の案</span><span class="candidate-btn-sub">（配慮対象者の座席）</span></button>
-          <button type="button" class="candidate-btn multiline-btn secondary" id="night-btn-shuffle-others"><span>その他の座席を</span><span>シャッフル</span></button>
+          <button type="button" class="candidate-btn multiline-btn" id="night-btn-next-pattern" title="配置条件を満たす
+　　別案を表示　"><span>配置条件を満たす</span><span>別案を表示</span></button>
+          <button type="button" class="candidate-btn multiline-btn secondary" id="night-btn-shuffle-others" title="禁止席対象者と条件指定の無いスタッフをシャッフル"><span>一部シャッフル</span><span class="candidate-btn-sub">（詳細はマウスオーバー）</span></button>
         </div>
       </div>
     </div>

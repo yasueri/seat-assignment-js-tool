@@ -10,6 +10,8 @@
     --rookie-bg:#E7F5EE;
     --lock:#B8860B;
     --lock-bg:#FBF3DE;
+    --adjacent:#C2255C;
+    --adjacent-bg:#FCE8EF;
     --overflow:#C0392B;
     --overflow-bg:#FBEAE8;
     --mentor:#6B46C1;
@@ -531,6 +533,7 @@
   .badge.rookie{ background:var(--rookie-bg); color:var(--rookie); }
   .badge.designated{ background:#E6F0FB; color:var(--accent-dark); }
   .badge.lock{ background:var(--lock-bg); color:var(--lock); }
+  .badge.adjacent{ background:var(--adjacent-bg); color:var(--adjacent); }
   .badge.mentor{ background:var(--mentor-bg); color:var(--mentor); }
   .badge.support{ background:var(--support-bg); color:var(--support); }
 
