@@ -187,9 +187,10 @@ small,.note{color:var(--muted);}
     </div>
     <div class="toc-col">
       <p class="toc-part">CSVファイルの編集方法</p>
-      <ol>
+      <ol start="7">
         <li><a href="#sec-csv-table">CSVファイル早見表</a></li>
         <li><a href="#sec-csv-write">ファイル別の書き方</a></li>
+        <li><a href="#sec-csv-trouble">CSVが反映されないとき</a></li>
       </ol>
     </div>
   </div>
@@ -335,29 +336,25 @@ small,.note{color:var(--muted);}
   <div class="maprow">
     <figure>
       <table class="smap">
-        <tr><td>1</td><td class="hl-g">5</td><td class="hl-x">9※</td><td>13</td></tr>
-        <tr><td>2</td><td class="hl-g">6</td><td class="hl-b">10</td><td>14</td></tr>
-        <tr><td>3</td><td class="hl-g">7</td><td>11</td><td class="hl-p">15</td></tr>
-        <tr><td>4</td><td class="hl-g">8</td><td class="hl-p">12</td><td class="void">×</td></tr>
+        <tr><td>1</td><td>5</td><td>9</td><td>13</td></tr>
+        <tr><td>2</td><td>6</td><td>10</td><td>14</td></tr>
+        <tr><td>3</td><td>7</td><td>11</td><td>15</td></tr>
+        <tr><td>4</td><td>8</td><td>12</td><td class="void">×</td></tr>
       </table>
       <figcaption>全15席。右下の1席は存在しません。</figcaption>
     </figure>
-    <figure>
+    <div>
       <table>
-        <tr><th>色</th><th>意味</th></tr>
-        <tr><td><span class="bdg b-rookie">5〜8</span></td><td>新人固定席。新人1〜7の順に <b>5→10→6→11→7→12→8</b>（10・11・12は他の用途と重なるため色は付けていません）</td></tr>
-        <tr><td><span class="bdg b-fix">10</span></td><td>夜勤の役席・GLが2名以上の日、2人目が入る席</td></tr>
-        <tr><td><span class="bdg b-ojt">15・12・8・4</span></td><td>教官1名+OJT1名の同席の既定順（15→12→8→4→3→2→1→他）</td></tr>
-        <tr><td><span class="bdg b-lock">9</span></td><td>通常の自動配置（新人固定席・通常探索など）では対象外。固定席・要サポート・教官/OJT同席で明示指定があれば例外的に配置され、メッセージで知らせる。手動配置は常に可</td></tr>
+        <tr><th>用語</th><th>意味</th></tr>
+        <tr><td>列</td><td>縦のまとまり。左から列1（座席1〜4）・列2（座席5〜8）・列3（座席9〜12）・列4（座席13〜15）</td></tr>
+        <tr><td>行</td><td>横のまとまり。上から1行目（座席1・5・9・13）…4行目（座席4・8・12）</td></tr>
+        <tr><td>座席番号</td><td>左の列から順に、上から下へ1〜15</td></tr>
       </table>
-      <p class="note" style="margin-top:-6px">
-        <b>列</b> … 縦のまとまり（列2＝座席5〜8）<br>
-        <b>隣接</b>（隣接禁止）… <b>上下・左右・斜めのすべて</b>でとなり合うこと。<br>
-        例: 座席1のとなりは 2・5・6／座席6のとなりは 1・2・3・5・7・9・10・11。<br>
-        <b>夜勤の隣接回避だけは別</b>で、同じ列で上下にとなり合う場合（例: 5と6）のみを避けます。
-      </p>
-    </figure>
+      <p class="note">1つの座席には、勤務時間が重ならなければ2名まで入ります（交代で使う想定）。<br>
+      座席9番は自動配置では使いません（→<a href="#sec-priority">4. 自動配置の順番</a>）。</p>
+    </div>
   </div>
+  <p class="note">画面では、この座席マップの右に「早番」「遅番」エリアと「あふれ」欄が並びます。夜勤は画面を下にスクロールすると別の座席マップ（夜勤パネル）として表示されます。</p>
 </section>
 
 <section>
@@ -368,12 +365,18 @@ small,.note{color:var(--muted);}
     <tr><td><span class="bdg b-fix">固定席</span></td><td>secret.csvで座席指定。候補1〜2件は座席番号、3件以上は「複数有」と表示</td></tr>
     <tr><td><span class="bdg b-sup">要サポ</span></td><td>要サポート対象者。表示ルールは固定席と同じ</td></tr>
     <tr><td><span class="bdg b-lock">禁止席</span></td><td>禁止席の対象者。表示ルールは固定席と同じ</td></tr>
-    <tr><td><span class="bdg b-adjacent">隣禁止</span></td><td>ペア（secret.csvの行）ごとにA・B・C…。自分が属するペアの記号をすべて表示（例: 2ペアなら「AB」、4ペア以上は「4以上」）。同じ記号の人同士が相手</td></tr>
+    <tr><td><span class="bdg b-adjacent">隣禁止</span></td><td>ペア（secret.csvの行）ごとにA・B・C…。自分が属するペアの記号をすべて表示（例: 2ペアなら「AB」、4ペア以上は「4以上」）。<b>同じ記号の人同士が相手</b></td></tr>
     <tr><td><span class="bdg b-fix">夜勤GL席</span></td><td>「夜勤GL席」指定だが枠に選ばれず座席1〜15に配置された人（夜勤のみ）</td></tr>
     <tr><td><span class="bdg b-ojt">教官</span> / <span class="bdg b-ojt">OJT</span></td><td>ojt.csv記載者</td></tr>
     <tr><td><span class="ot">7:30※</span></td><td>時刻が黄色＋※ … その時刻は残業（前残業/後残業）</td></tr>
   </table>
-  <p class="note">配置しきれなかった人は右の「あふれ」欄へ（早番・遅番エリアの6名超過分も同じ「あふれ」欄に入ります）。夜勤パネル左の見出しのない枠は予備枠で、一時置き場や印刷後の手書きスペースに使えます。座席9番は通常の自動配置では対象外ですが、固定席・要サポート・教官/OJT同席で明示指定されていれば配置されます（手動でのドラッグ配置は常に可能）。</p>
+  <div class="sidebox">
+    <b><span class="bdg b-adjacent">隣禁止</span>バッジの「となり」とは</b><br>
+    <b>上下・左右・斜めのすべて</b>で、となり合う席のことです。<br>
+    例: 座席1のとなりは <b>2・5・6</b>／座席6のとなりは <b>1・2・3・5・7・9・10・11</b>（8席）<br>
+    日勤・夜勤のどちらでも同じで、この条件は必ず守られます。
+  </div>
+  <p class="note">配置しきれなかった人は右の「あふれ」欄へ（早番・遅番エリアの6名超過分も同じ「あふれ」欄に入ります）。夜勤パネル左の見出しのない枠は予備枠で、一時置き場や印刷後の手書きスペースに使えます。</p>
 </section>
 
 <section>
@@ -386,7 +389,7 @@ small,.note{color:var(--muted);}
   <ol class="pipe">
     <li><b>0. 優先フラグ</b><span class="src">secret.csv</span><br>全ルール中の最優先。数値が小さい人から。同数値は「新人→教官・OJT→固定席→要サポート→その他」→出勤時刻順</li>
     <li><b>1. 新人固定席</b><span class="src">rookie.csv</span><br>席5→10→6→11→7→12→8の順に上位7名（OPのみ）。8人目以降は通常の空席探索</li>
-    <li><b>2. 教官・OJT</b><span class="src">ojt.csv</span><br>教官+OJT一人目を同席、二人目は近くの席をペアで確保</li>
+    <li><b>2. 教官・OJT</b><span class="src">ojt.csv</span><br>教官とOJT対象者を同一座席に配置。座席の決まり方は <a href="#sec-csv-write">8. ファイル別の書き方（ojt.csv）</a> を参照</li>
     <li><b>3. 固定席</b><span class="src">secret.csv</span><br>候補座席が少ない人を先に（同数なら出勤時刻順）。候補の入力順＝優先順</li>
     <li><b>4. 要サポート</b><span class="src">secret.csv</span><br>並び順ルールは固定席と同じ</li>
     <li class="alt"><b>5. 隣接禁止の対象者（未配置の人）</b><span class="src">secret.csv</span><br>枝刈り付き<b>全探索（backtrack）</b>で「全員置ける組み合わせ」を探し、偏りが少なく・勤務時間がぴったり接する同席が少ない案を自動採用。「本当は解けるのにあふれる」ことを防ぐ。1件も見つからない/制限時間（1段階あたり5秒）超過の時のみ出勤時刻順にフォールバック</li>
@@ -400,7 +403,13 @@ small,.note{color:var(--muted);}
     ・段階2 … 固定席より前（<b>ここが上限</b>）<br>
     優先フラグ・新人固定席・教官・OJTより前には動かしません。繰り上げで後回しになった固定席・要サポートは、本人の指定席をまず優先候補として試し、それでも無理なら指定席を外して隣接禁止を優先します（その場合はメッセージが出ます）。
   </div>
-  <p class="note">各段階で配置済みの人は後の段階では処理されません。指定席に置けなかった場合はメッセージを出して通常の空席探索へ。<b>夜勤のみ</b>、同列で上下に隣接する座席を（他に候補がある限り）避けます（隣接禁止の「全方向」とは別の、ゆるやかな回避です）。固定席などの都合で隣接するのは問題ありません。</p>
+  <table>
+    <tr><th>ルール</th><th>強さ</th><th>範囲</th><th>対象</th></tr>
+    <tr><td><b>隣接禁止</b><br>（secret.csv）</td><td><b>必ず守る</b><br>守れない配置は採用されない</td><td>上下・左右・斜めの<b>全方向</b></td><td>指定されたペアのみ<br>日勤・夜勤とも</td></tr>
+    <tr><td><b>夜勤の隣接回避</b></td><td><b>できれば避ける</b><br>他に空席がなければ隣に置く</td><td><b>同じ列の上下だけ</b><br>（例: 5と6）</td><td>夜勤パネル全員</td></tr>
+  </table>
+  <p class="note">この2つは別のルールです。<b>夜勤でも「隣接禁止」のペアは全方向で隣り合いません。</b>夜勤の隣接回避は、それとは別に「他に空席があるなら縦に並べない」というゆるやかな配慮で、固定席などの都合で結果的に隣り合うのは問題ありません。</p>
+  <p class="note">各段階で配置済みの人は後の段階では処理されません。指定席に置けなかった場合はメッセージを出して通常の空席探索へ。<b>座席9番</b>は通常の自動配置では使いませんが、固定席・要サポート・教官/OJT同席で明示的に9と指定されていれば配置され、その旨メッセージが出ます（手動でのドラッグ配置は常に可能）。</p>
 </section>
 
 <section>
@@ -441,7 +450,7 @@ small,.note{color:var(--muted);}
 <section>
   <h2 id="sec-trouble">困ったときは<span class="back-to-toc">（<a href="#toc">▲ 目次</a>）</span></h2>
   <p>まず「2. メッセージ」欄を読んでください。入力エラーがあっても自動配置は止まらず、行番号つきの警告として表示されます。配置結果に反映されない行がないか、実行のたびに確認する習慣がいちばんの近道です。</p>
-  <p class="note">細かい判定ルールの要約は、画面内の折りたたみ説明（▼）にもあります。</p>
+  <p class="note">CSVの内容が反映されないときは <a href="#sec-csv-trouble">9. CSVが反映されないとき</a> を参照してください。細かい判定ルールの要約は、画面内の折りたたみ説明（▼）にもあります。</p>
 </section>
 
 <h1 class="part-title" id="part-csv">CSVファイルの編集方法</h1>
@@ -531,7 +540,7 @@ small,.note{color:var(--muted);}
         <tr><td>禁止席</td><td>渡辺六郎</td><td></td><td>1</td><td>1</td></tr>
       </table>
       <table>
-        <tr><th>種別</th><th>意味</th><th>書きかた</th></tr>
+        <tr><th style="min-width:5.5em">種別</th><th>意味</th><th>書きかた</th></tr>
         <tr><td>隣接禁止</td><td>対象1と対象2を、<b>上下・左右・斜め</b>のとなり合う席にしない（例: 座席1のとなりは 2・5・6）</td><td>対象2に相手の氏名。<b>同じ人を複数行に書いてもよい</b></td></tr>
         <tr><td>禁止席</td><td>対象座席には配置しない</td><td rowspan="3">対象2は空欄。対象座席は半角数字をスペース区切りで（例 <code>7 11</code> → 7を優先、空いていなければ11）。<b>1人1行にまとめる</b>（同じ人・同じ種別が2行以上あると自動配置が実行できない）</td></tr>
         <tr><td>固定席</td><td>対象座席に必ず配置する</td></tr>
@@ -579,6 +588,63 @@ small,.note{color:var(--muted);}
         <tr><td>補足</td><td>教官が役席・GLでも担当OJTが出勤する日は座席グリッド側へ。OJT対象者が新人固定席の対象（上位7名）を兼ねる場合は新人固定席が優先され同席しない</td></tr>
       </table>
     </div>
+  </div>
+</section>
+
+<section>
+  <h2 id="sec-csv-trouble">CSVが反映されないとき<span class="back-to-toc">（<a href="#toc">▲ 目次</a>）</span></h2>
+  <p><b>まずメッセージ欄を見てください。</b>ほとんどの原因は行番号つきで表示されています。下は代表的なメッセージと対処です。</p>
+  <table>
+    <tr><th>症状・メッセージ</th><th>原因</th><th>対処</th></tr>
+    <tr><td>文字が「譁�蟄怜喧」のように化ける</td><td>Excelで普通の「CSV」形式で保存した</td><td>「名前を付けて保存」→ <b>「CSV UTF-8（コンマ区切り）」</b>を選ぶ</td></tr>
+    <tr><td>その人だけバッジが付かない<br>／指定が効いていない</td><td><b>氏名が月間シフトCSVと不一致</b>（最も多い原因）</td><td>姓名の間のスペースの有無・全角半角までそろえる。月間シフトCSVからコピー＆貼り付けが確実</td></tr>
+    <tr><td><code>ヘッダー行が想定と異なります</code></td><td>1行目の列名や並び順が違う</td><td>早見表の列の順番どおりに直す（処理は列の位置で続行されるため、並び順がずれていると別の列として読まれます）</td></tr>
+    <tr><td><code>○○さんの固定席が複数行に…</code><br>（固定席・禁止席・要サポート）</td><td>同じ人・同じ種別が2行以上ある</td><td><b>1人1行にまとめる</b>。座席は <code>5 9</code> のようにスペース区切りで1つのセルに（隣接禁止だけは複数行OK）</td></tr>
+    <tr><td><code>日付の形式が不正なため読み飛ばしました</code></td><td>日付が <code>6/1</code> や <code>2026.6.1</code> など</td><td><code>2026-06-01</code> または <code>2026/6/1</code> に直す</td></tr>
+    <tr><td><code>時刻の形式が不正</code><br><code>開始時刻が終了時刻以降</code></td><td>夜勤の終了を <code>8:00</code> と書いた</td><td>24時以降の延長表記に（翌8:00なら <code>32:00</code>）</td></tr>
+    <tr><td><code>役割「◯◯」は認識できません</code></td><td>役割が3種類以外</td><td><b>役席 / GL / OP</b> のいずれかにする</td></tr>
+    <tr><td><code>「７」は座席番号として認識できません</code></td><td>座席番号が全角数字</td><td><b>半角数字</b>に直す（区切りのスペースは全角でも可）</td></tr>
+    <tr><td><code>「夜勤GL席」は固定席でのみ指定できます</code></td><td>禁止席・要サポートに「夜勤GL席」と書いた</td><td>種別を<b>固定席</b>にする</td></tr>
+    <tr><td><code>教官「◯◯」が複数行に記載されています</code></td><td>同じ教官が2行以上ある</td><td>1行にまとめ、OJT対象者は「一人目」「二人目」の列に分けて書く（3名以上は担当できません）</td></tr>
+    <tr><td><code>新人度合いが数値ではないため…</code></td><td>「1年目」など数値以外</td><td>半角数字だけを書く（<code>1</code>、<code>2</code> …）</td></tr>
+  </table>
+
+  <h3>記述例（そのまま真似できる形）</h3>
+
+  <p><b>secret.csv ― 1人に複数の指定をしたい</b></p>
+  <table>
+    <tr><th>種別</th><th>対象1</th><th>対象2</th><th>対象座席</th><th>優先フラグ</th></tr>
+    <tr><td>固定席</td><td>山田太郎</td><td></td><td>7 11</td><td></td></tr>
+    <tr><td>隣接禁止</td><td>山田太郎</td><td>佐藤花子</td><td></td><td></td></tr>
+    <tr><td>隣接禁止</td><td>山田太郎</td><td>鈴木一郎</td><td></td><td></td></tr>
+  </table>
+  <p class="note">同じ「山田太郎」でも<b>種別が違えば別の行でOK</b>。隣接禁止は相手ごとに1行ずつ書きます（この例では「隣禁止」バッジが <span class="bdg b-adjacent">AB</span> のように2文字で表示されます）。<br>
+  一方、<b>固定席をもう1行足すのはNG</b>です（<span class="x" style="color:#C0392B;font-weight:bold">×</span> 固定席の行を2つに分ける → <span class="o" style="color:#2E8B57;font-weight:bold">○</span> <code>7 11</code> と1行にまとめる）。</p>
+
+  <p><b>secret.csv ― どうしてもこの人を先に決めたい</b></p>
+  <table>
+    <tr><th>種別</th><th>対象1</th><th>対象2</th><th>対象座席</th><th>優先フラグ</th></tr>
+    <tr><td>固定席</td><td>高橋次郎</td><td></td><td>3</td><td>1</td></tr>
+  </table>
+  <p class="note">優先フラグに <code>1</code> と書くと、他のどのルールよりも先に配置されます。複数人に付ける場合は <code>1</code>、<code>2</code>、<code>3</code>… と数値で順番を付けます（小さいほど先）。</p>
+
+  <p><b>ojt.csv ― 教官1名がOJT2名を担当する</b></p>
+  <table>
+    <tr><th>教官名</th><th>OJT一人目</th><th>OJT二人目</th><th>対象座席</th></tr>
+    <tr><td>教官　朝八</td><td>新人　二</td><td>新人　三</td><td></td></tr>
+  </table>
+  <p class="note">対象座席は<b>空欄でかまいません</b>（既定の順番で自動的に決まります）。特定の席に寄せたいときだけ <code>12</code> のように書きます。</p>
+
+  <p><b>月間シフトCSV ― 夜勤の書き方</b></p>
+  <table>
+    <tr><th>日付</th><th>氏名</th><th>開始時刻</th><th>終了時刻</th><th>前残業</th><th>後残業</th><th>役割</th></tr>
+    <tr><td>2026-06-01</td><td>佐藤花子</td><td>22:00</td><td>32:00</td><td>FALSE</td><td>FALSE</td><td>OP</td></tr>
+  </table>
+  <p class="note">翌朝8:00までの勤務は <code>32:00</code>（24+8）と書きます。<code>8:00</code> と書くと「開始時刻が終了時刻以降」として読み飛ばされます。</p>
+
+  <div class="sidebox">
+    <b>直したあとは</b><br>
+    CSVを保存し直したら、画面のボタンから<b>もう一度読み込んで</b>ください。ファイルを直しただけでは画面に反映されません。読み込み後、必要に応じて「自動配置を実行」をやり直します。
   </div>
 </section>
 
