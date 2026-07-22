@@ -68,7 +68,7 @@
     <table>
       <tr><th>ファイル</th><th>必須</th><th>役割</th></tr>
       <tr><td>月間シフトCSV</td><td><span class="chip req">必須</span></td><td>1か月分の全出勤情報（ツール側で日付ごとに抽出）</td></tr>
-      <tr><td>rookie.csv</td><td><span class="chip opt">任意</span></td><td>新人の固定席（座席5〜8）</td></tr>
+      <tr><td>rookie.csv</td><td><span class="chip opt">任意</span></td><td>新人の固定席（座席5→10→6→11→7→12→8）</td></tr>
       <tr><td>secret.csv</td><td><span class="chip opt">任意</span></td><td>禁止席・固定席・要サポート・隣接禁止・優先フラグ</td></tr>
       <tr><td>ojt.csv</td><td><span class="chip opt">任意</span></td><td>教官とOJT対象者の同席</td></tr>
     </table>
@@ -81,7 +81,9 @@
       <tr><td>3</td><td class="hl-r">7</td><td>11</td><td class="hl-m">15</td></tr>
       <tr><td>4</td><td class="hl-r">8</td><td class="hl-m">12</td><td class="void">×</td></tr>
     </table>
-    <p>緑＝新人固定席（上から新人1〜4）／青＝夜勤の役席・GL2人目の席／紫＝教官・OJT同席の既定の探索順（15→12→8→4→他）／※<strong>座席9番は自動配置の対象外</strong>です（手動でのドラッグ＆ドロップでは配置できます）。</p>
+    <p>緑＝新人固定席／青＝夜勤の役席・GL2人目の席／紫＝教官・OJT同席の既定の探索順（15→12→8→4→3→2→1→他）／※<strong>座席9番は自動配置の対象外</strong>です（手動でのドラッグ＆ドロップでは配置できます）。</p>
+    <p>新人固定席は<strong>5→10→6→11→7→12→8</strong>の順（新人1〜7）です。10・11・12は他の用途と重なるため、上の図では色を付けていません。</p>
+    <p><strong>隣接禁止の「隣」は上下・左右・斜めのすべて</strong>です（例: 座席1のとなりは 2・5・6、座席6のとなりは 1・2・3・5・7・9・10・11）。</p>
 
     <p class="manual-link">▶ 各ファイルの書きかた・よくある間違いは <a href="manual.html#sec-csv-write" target="_blank" rel="noopener">図解マニュアル「CSVファイルの編集方法」</a> を参照</p>
     </div>
@@ -91,9 +93,11 @@
     <summary>自動配置の処理順序について</summary>
     <div class="help-content">
     <p>役席・GLの別枠（早番・遅番エリア／夜勤GL枠）を先に確定したあと、座席1〜15を次の順で配置します。</p>
-    <p><strong>優先フラグ → 新人固定席 → 固定席 → 教官・OJT → 要サポート → 隣接禁止・禁止席の対象者（全探索） → その他のスタッフ（出勤時刻が早い順）</strong></p>
+    <p><strong>優先フラグ → 新人固定席 → 教官・OJT → 固定席 → 要サポート → 隣接禁止の対象者（全探索） → 禁止席だけの対象者 → その他のスタッフ（出勤時刻が早い順）</strong></p>
     <p>座席9番はどの段階でも自動配置の対象外です。指定席に配置できなかった場合は、メッセージを表示したうえで通常の空席探索にフォールバックします。</p>
-    <p class="manual-link">▶ 各段階のくわしいルールと「シャッフル」ボタンは <a href="manual.html#sec-priority" target="_blank" rel="noopener">図解マニュアル「自動配置の順番（優先順位）」</a> を参照</p>
+    <p>隣接禁止の全探索で1通りも見つからなかった場合は、隣接禁止の順番を1段階ずつ前へ繰り上げて探し直します（段階1＝要サポートより前、段階2＝固定席より前まで）。優先フラグ・新人固定席・教官・OJTより前には動かしません。</p>
+    <p>夜勤のみ、同列で上下に隣接する座席を（他に候補がある限り）避けます。これは隣接禁止の「全方向」とは別の、ゆるやかな回避です。</p>
+    <p class="manual-link">▶ 各段階のくわしいルールと候補ボタンは <a href="manual.html#sec-priority" target="_blank" rel="noopener">図解マニュアル「自動配置の順番（優先順位）」</a> を参照</p>
     </div>
   </details>
 </div>
@@ -112,11 +116,11 @@
     <p>各カードの氏名の右にある✎アイコンから、氏名・時刻の手入力修正や、その日の配置からの削除ができます。</p>
     <table>
       <tr><th>表示</th><th>意味</th></tr>
-      <tr><td>新人1〜新人4</td><td>新人（rookie.csv記載者）の、列2固定席での優先順位</td></tr>
+      <tr><td>新人1〜新人7</td><td>新人（rookie.csv記載者）の固定席での優先順位（8人目以降はバッジなし）</td></tr>
       <tr><td>固定席</td><td>secret.csvで座席を指定されている人（候補3件以上は「複数有」と表示）</td></tr>
       <tr><td>要サポ</td><td>「要サポート」として座席を指定されている人（表示ルールは固定席と同じ）</td></tr>
       <tr><td>禁止席</td><td>指定座席への配置を禁止されている人</td></tr>
-      <tr><td>隣禁止</td><td>同じ記号（A・B…）を持つ人同士が隣接禁止の相手</td></tr>
+      <tr><td>隣禁止</td><td>同じ記号（A・B…）を持つ人同士が隣接禁止の相手。「禁止席」バッジとは色で区別しています（隣禁止＝ピンク／禁止席＝黄）</td></tr>
       <tr><td>夜勤GL席</td><td>「夜勤GL席」指定だが枠には選ばれず、座席1〜15に配置された人（夜勤のみ）</td></tr>
       <tr><td>教官／OJT</td><td>ojt.csvに記載されている教官／OJT対象者</td></tr>
       <tr><td>黄色の時刻＋※</td><td>その出退勤時刻が残業（前残業／後残業）であることを示します</td></tr>
@@ -134,8 +138,27 @@
       <tr><td>席を入れ替える（座席9番も含め、どの座席にも手動でなら配置できます）</td><td>カードをドラッグ＆ドロップ。同じ枠内はもちろん、早番⇔遅番、座席⇔あふれなど、別の枠との間でも自由に移動できます</td></tr>
       <tr><td>氏名・時刻を直す／その日の配置から外す</td><td>カードの氏名の右にある✎アイコン</td></tr>
       <tr><td>手動で動かした後の確認</td><td>「手動変更後 配置違反チェック」を押します。ドラッグ操作は配置ルールを自動チェックしないため、動かしたら必ず実行してください</td></tr>
+      <tr><td>別の配置案を見る</td><td>座席表の右の候補欄で「次案を表示」。押すたびに次の候補へ進み、最後まで行くと候補1に戻ります。行き過ぎたら「候補1に戻す」で候補1へ一発で戻れます</td></tr>
+      <tr><td>条件のない人だけ入れ替える</td><td>「一部シャッフル」。隣接禁止・固定席・要サポート・教官OJT・新人固定席の座席はそのままで、禁止席だけの対象者とその他スタッフを振り直します</td></tr>
       <tr><td>チェック・印刷・保存/読み込みのボタンの場所</td><td>下の「4. 夜勤 座席配置」パネルの末尾（日勤・夜勤の両方が対象です）</td></tr>
     </table>
+    </div>
+  </details>
+
+    <details class="help">
+    <summary>候補欄（別案の切り替え）について</summary>
+    <div class="help-content">
+    <p>隣接禁止の対象者がいる日は、座席表の右に「候補 3 / 12」のような欄が出ます。実行可能な配置は複数あるため、その中から選べるようにしたものです。候補は<strong>良い順に並んでいます</strong>。</p>
+    <p>候補の数字の下のラベルは、いま見ている案が先頭の案と比べてどうかを示します。</p>
+    <table>
+      <tr><th>ラベル</th><th>意味</th></tr>
+      <tr><td>最良グループ（○件）</td><td>先頭の案と同じ評価。この中はどれを選んでも構いません</td></tr>
+      <tr><td>同時刻入替が○件多い案</td><td>交代時刻がぴったり接する同席が、その件数だけ多い（入れ替わりに時間がかかります）</td></tr>
+      <tr><td>指定席どおりでない方が○名</td><td>隣接禁止の繰り上げが起きた日に出ることがあります</td></tr>
+    </table>
+    <p>劣る案も隠さずに表示しています。ラベルが変わったところが境目なので、行き過ぎたら「候補1に戻す」で戻ってください。<strong>実行可能な配置が多い日は、集めた99件すべてが同じ評価になり、ラベルはずっと「最良グループ（99件）」のままになります。</strong></p>
+    <p>メッセージ欄の件数は3通りの出し方をします。<strong>「32通り見つけました」</strong>＝探索し尽くした確定の数／<strong>「99通り以上見つけました」</strong>＝99通りまで集めた時点でまだ他にもあった／<strong>「47通り見つけたところで、探索の制限時間（5秒）になりました」</strong>＝時間切れ（表示中の案は使えますが、他にも案がある可能性があります）。</p>
+    <p class="manual-link">▶ くわしくは <a href="manual.html#sec-buttons" target="_blank" rel="noopener">図解マニュアル「ボタンと注意点」</a> を参照</p>
     </div>
   </details>
 
@@ -153,10 +176,11 @@
     <div class="candidate-panel">
       <div class="candidate-panel-inner" id="day-candidate-inner" hidden>
         <div class="candidate-count" id="day-candidate-count">候補 -/-</div>
+        <div class="candidate-note" id="day-candidate-note"></div>
         <div class="candidate-buttons">
-          <button type="button" class="candidate-btn multiline-btn" id="day-btn-next-pattern" title="配置条件を満たす
-　別案を表示　"><span>配置条件を満たす</span><span>別案を表示</span></button>
-          <button type="button" class="candidate-btn multiline-btn secondary" id="day-btn-shuffle-others" title="禁止席対象者と条件指定の無いスタッフをシャッフル"><span>一部シャッフル</span><span class="candidate-btn-sub">（詳細はマウスオーバー）</span></button>
+          <button type="button" class="candidate-btn" id="day-btn-next-pattern" title="次の候補を表示します">次案を表示</button>
+          <button type="button" class="candidate-btn" id="day-btn-best-pattern" title="候補1（最良と判定された案）に戻します">候補1に戻す</button>
+          <button type="button" class="candidate-btn secondary" id="day-btn-shuffle-others" title="禁止席対象者と条件指定の無いスタッフのみシャッフルします">一部シャッフル</button>
         </div>
       </div>
     </div>
@@ -191,7 +215,7 @@
     <summary>操作方法について</summary>
     <div class="help-content">
     <p>
-      「3. 日勤 座席配置」パネルの「操作方法について」を参照してください。
+      「3. 日勤 座席配置」パネルの「操作方法について」「候補欄（別案の切り替え）について」を参照してください。夜勤側にも同じ候補欄・ボタンがあります。
     </p>
     </div>
   </details>
@@ -210,10 +234,11 @@
     <div class="candidate-panel">
       <div class="candidate-panel-inner" id="night-candidate-inner" hidden>
         <div class="candidate-count" id="night-candidate-count">候補 -/-</div>
+        <div class="candidate-note" id="night-candidate-note"></div>
         <div class="candidate-buttons">
-          <button type="button" class="candidate-btn multiline-btn" id="night-btn-next-pattern" title="配置条件を満たす
-　　別案を表示　"><span>配置条件を満たす</span><span>別案を表示</span></button>
-          <button type="button" class="candidate-btn multiline-btn secondary" id="night-btn-shuffle-others" title="禁止席対象者と条件指定の無いスタッフをシャッフル"><span>一部シャッフル</span><span class="candidate-btn-sub">（詳細はマウスオーバー）</span></button>
+          <button type="button" class="candidate-btn" id="night-btn-next-pattern" title="次の候補を表示します">次案を表示</button>
+          <button type="button" class="candidate-btn" id="night-btn-best-pattern" title="候補1（最良と判定された案）に戻します">候補1に戻す</button>
+          <button type="button" class="candidate-btn secondary" id="night-btn-shuffle-others" title="禁止席対象者と条件指定の無いスタッフのみシャッフルします">一部シャッフル</button>
         </div>
       </div>
     </div>
@@ -259,7 +284,8 @@
     <summary>配置の保存・読み込みについて</summary>
     <div class="help-content">
     <p>「現在の配置を保存」で、いま表示中の配置（手動調整の内容を含む）をJSONファイルとしてダウンロードします。「保存した配置を読み込む」で、そのJSONファイルを選択すると保存した時点の配置画面が復元されます。</p>
-    <p><strong>保存ファイルには secret.csv・ojt.csv から推測できる情報（バッジ情報を含む）は一切含まれません。</strong>読み込み後にバッジ表示や配置違反チェックを使うには、別途 secret.csv・ojt.csv の読み込みが必要です（既に読み込み済みなら自動的に適用されます）。</p>
+    <p><strong>保存ファイルには secret.csv から推測できる情報（固定席・禁止席・要サポート・隣禁止・優先フラグ・夜勤GL席のバッジ）は一切含まれません。</strong>読み込み後にこれらのバッジ表示や配置違反チェックを使うには、別途 secret.csv の読み込みが必要です（既に読み込み済みなら自動的に適用されます）。</p>
+    <p>一方、<strong>新人（rookie.csv）と教官・OJT（ojt.csv）のバッジ情報は保存ファイルに含まれます。</strong>配置の制約を推測させる情報ではないため例外扱いで、これらのCSVがない環境で保存ファイルを開いてもバッジが失われません。<strong>ojt.csv を読み込んでいない状態で保存ファイルを読み込んだ場合は、保存ファイルが持っている教官・OJTの情報がそのまま維持されます</strong>（読み込み済みの場合は、そのojt.csvの内容で付け直されます）。</p>
     <p class="manual-link">▶ くわしくは <a href="manual.html#sec-buttons" target="_blank" rel="noopener">図解マニュアル「ボタンと注意点」</a> を参照</p>
     </div>
   </details>

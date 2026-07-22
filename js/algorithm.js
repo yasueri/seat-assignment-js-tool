@@ -1,6 +1,6 @@
 // ============================================================
 // algorithm.js
-// 座席の定義と、優先フラグ → 新人固定席 → 固定席 → 教官・OJT → 要サポート →
+// 座席の定義と、優先フラグ → 新人固定席 → 教官・OJT → 固定席 → 要サポート →
 // 隣接禁止 → 禁止席のみの対象者 → その他スタッフ の順で座席を割り当てる
 // アルゴリズムを担当する。隣接禁止対象者の全探索backtrack（■2。
 // 旧algorithmExhaustive.js。ver4.9でこのファイルに統合）と、隣接禁止の条件を
@@ -77,14 +77,31 @@ window.SeatTool.algorithm = (function () {
   function numberOfKey(key) { return NUMBER_BY_KEY[key] || null; }
   function numberOfSeat(row, col) { return numberOfKey(`${row}-${col}`); }
 
+  // 隣接禁止（ルール1）の「隣接」の定義。ver4.16から全方向（上下左右＋斜め）を
+  // 隣接とみなす（ver4.15までは同列の上下のみだった）。
+  //   例: 座席1（1行1列）の隣接席 → 2・5・6
+  //       座席6（2行2列）の隣接席 → 1・2・3・5・7・9・10・11
   function isAdjacentSeat(a, b) {
+    if (a.key === b.key) return false;
+    return Math.abs(a.row - b.row) <= 1 && Math.abs(a.col - b.col) <= 1;
+  }
+
+  // 同列で上下に隣接するかどうか（夜勤の「なるべく隣に座らせない」ソフトな
+  // 優先度でのみ使用する。隣接禁止ルールそのものには使わない）
+  function isSameColumnAdjacentSeat(a, b) {
     return a.col === b.col && Math.abs(a.row - b.row) === 1;
   }
 
-  // 座席キー -> 同列で隣接する座席キーの一覧（ルール1判定に使用）
+  // 座席キー -> 隣接する座席キーの一覧（ルール1＝隣接禁止の判定に使用。全方向）
   const ADJACENCY = {};
   for (const s of SEATS) {
     ADJACENCY[s.key] = SEATS.filter(t => t.key !== s.key && isAdjacentSeat(s, t)).map(t => t.key);
+  }
+
+  // 座席キー -> 同列で上下に隣接する座席キーの一覧（夜勤のソフトな回避専用）
+  const COLUMN_ADJACENCY = {};
+  for (const s of SEATS) {
+    COLUMN_ADJACENCY[s.key] = SEATS.filter(t => t.key !== s.key && isSameColumnAdjacentSeat(s, t)).map(t => t.key);
   }
 
   // ---------- 補助関数 ----------
@@ -223,27 +240,36 @@ window.SeatTool.algorithm = (function () {
   // ・教官が本日不在の場合、OJT対象者は同席する相手がいないためお1人で配置する
   //   （対象座席の優先順のみ流用。手動での臨時教官の割り当てが必要な旨をログに残す）
   // ・複数の教官がいる場合、教官1名・OJT2名（ペア配置）のケースを先に配置する。
-  //   教官1名・OJT1名側は、既定順（15→12→8→4→他）で空きが見つからなかった場合、
-  //   既に配置済みの教官1名・OJT2名の座席（教官+OJT一人目側・OJT二人目側の両方）と
-  //   同列で1つ前（行が1つ小さい側）の座席が空いていないかを追加で試す
-  //   （例: 教官+OJT2名が12・8に座っていれば、11・7が空いていないか探す）。
-  //   それでも見つからなければ、通常どおり他の空席から探す。
+  //   教官1名・OJT1名側は、既定順（15→12→8→4→3→2→1→他）で探す（ver4.16）。
+  // ・出勤している教官が2名でOJT対象者が合計2名のとき、ojt.csv上は片方の教官が
+  //   2名とも担当し、もう片方が0名という内訳であれば、教官1名・OJT1名ずつの
+  //   組み合わせに自動的に組み替える（ver4.16）。
   // ============================================================
 
-  // 単独配置（教官+OJT一人目）の既定候補順。ojt.csvの対象座席で指定した座席が
-  // これより前に来る（例:「12」なら 12,15,8,4 の順になる）
-  const OJT_DEFAULT_SINGLE_ORDER = [15, 12, 8, 4];
+  // ---------- 新人（rookie.csv）の既定座席順（ver4.16で変更） ----------
+  // 新人1人目→5番、2人目→10番、3人目→6番 … の順に固定席として配置する。
+  // この並びより人数が多い場合（8人目以降）は固定席を使わず通常の空席探索で配置する。
+  const ROOKIE_DEFAULT_SEAT_ORDER = [5, 10, 6, 11, 7, 12, 8];
 
-  // OJT二人目がいる場合のペア候補（[教官が座る側, OJT二人目が座る側]）。
-  // 対象座席から算出した単独順で12が15より先に来る教官は[12,8]を先に、
-  // そうでなければ[15,14]を先に試す。以降はどちらの教官でも共通の並び
-  // （フォールバック）。この並びはレイアウトに紐づく固定値のためojt.csvには
-  // 持たせずここに定数として置く（readme.txtにも同じ並びを記載する）。
-  // 末尾の(10,9)は座席9番が自動配置の対象外のため実際には使われることが
-  // なかったため削除した（ver4.10）。
+  // 単独配置（教官+OJT一人目）の既定候補順（ver4.16で 15→12→8→4 から拡張）。
+  // ojt.csvの対象座席で指定した座席がこれより前に来る
+  // （例:「12」なら 12,15,8,4,3,2,1 の順になる）。
+  // ここに無い座席は「他」として通常の空席探索で配置する。
+  const OJT_DEFAULT_SINGLE_ORDER = [15, 12, 8, 4, 3, 2, 1];
+
+  // OJT二人目がいる場合のペア候補（[教官＋OJT一人目が座る側, OJT二人目が座る側]）。
+  // ver4.16で並びを全面的に変更した。
+  //   主要候補: 12,8 → 12,15 → 15,14 → 4,3 → 3,2 → 2,1
+  //   （ojt.csvの対象座席で15を12より先に明示指定した教官のみ、15,14 を先に試す）
+  //   その他の隣接席（本来はここまで来ないことを想定した最終候補）:
+  //     12,11 → 8,7 → 11,10 → 7,6 → 6,5 → 14,13
+  // この並びはレイアウトに紐づく固定値のためojt.csvには持たせずここに定数として置く。
+  const OJT_PAIR_PRIMARY_12 = [[12, 8], [12, 15]];
+  const OJT_PAIR_PRIMARY_15 = [[15, 14]];
+  const OJT_PAIR_MAIN_TAIL = [[4, 3], [3, 2], [2, 1]];
+  // 「その他扱い」の隣接席。主要候補がすべて埋まっていた場合のみ使う。
   const OJT_FALLBACK_PAIR_TAIL = [
-    [12, 11], [8, 7], [4, 3], [11, 7], [11, 10], [7, 6],
-    [3, 2], [14, 13], [10, 6], [6, 5], [2, 1],
+    [12, 11], [8, 7], [11, 10], [7, 6], [6, 5], [14, 13],
   ];
 
   // ojt.csvの行から、判定・配置に使うインデックスを組み立てる
@@ -270,30 +296,18 @@ window.SeatTool.algorithm = (function () {
     return [...overridden, ...rest];
   }
 
-  // 単独順（ojtSingleSeatOrderの戻り値）から、ペア配置時にどちらの主要ペアを
-  // 先に試すかを決め、[主要ペア, 主要ペア, ...共通フォールバック] を返す
-  function ojtPairOrder(singleOrder) {
-    const pos12 = singleOrder.indexOf(12);
-    const pos15 = singleOrder.indexOf(15);
-    const primaries = (pos12 < pos15) ? [[12, 8], [15, 14]] : [[15, 14], [12, 8]];
-    return [...primaries, ...OJT_FALLBACK_PAIR_TAIL];
-  }
-
-  // 教官1名・OJT2名の配置で使った座席番号（教官+OJT一人目側／OJT二人目側の両方）から、
-  // 「同列で1つ前（行が1つ小さい側）」の座席番号を集める。教官1名・OJT1名のペアが
-  // 既定順（15→12→8→4）で空きを見つけられなかった場合の追加候補として使う
-  // （例: 教官+OJT2名が12・8に座っていれば11・7を候補にする）。行1（各列の最上段）の
-  // 座席にはこれより上が存在しないため対象外とする。
-  function ojtAdjacentUpCandidates(seatNumbers) {
-    const result = [];
-    const seen = new Set();
-    for (const num of seatNumbers) {
-      const seat = seatByNumber(num);
-      if (!seat || seat.row <= 1) continue;
-      const up = SEATS.find(s => s.row === seat.row - 1 && s.col === seat.col);
-      if (up && !seen.has(up.number)) { seen.add(up.number); result.push(up.number); }
-    }
-    return result;
+  // ojt.csvの対象座席（override配列）から、ペア配置時の候補順を作る。
+  // 既定は 12,8 → 12,15 → 15,14 の順。対象座席で15を12より先に明示指定した
+  // 教官のみ 15,14 を先に試す（指定なし＝既定順）。
+  function ojtPairOrder(seatOrder) {
+    const overridden = seatOrder || [];
+    const pos12 = overridden.indexOf(12);
+    const pos15 = overridden.indexOf(15);
+    const prefer15 = pos15 !== -1 && (pos12 === -1 || pos15 < pos12);
+    const primaries = prefer15
+      ? [...OJT_PAIR_PRIMARY_15, ...OJT_PAIR_PRIMARY_12]
+      : [...OJT_PAIR_PRIMARY_12, ...OJT_PAIR_PRIMARY_15];
+    return [...primaries, ...OJT_PAIR_MAIN_TAIL, ...OJT_FALLBACK_PAIR_TAIL];
   }
 
   // 教官・OJT一人目が同席する1座席分の配置可否。2枠とも空である座席のみを
@@ -384,7 +398,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   /**
-   * 教官・OJTの配置本体。assignSeats内で固定席の直後・新人固定席の前に呼び出す。
+   * 教官・OJTの配置本体。assignSeats内で新人固定席の直後・固定席の前に呼び出す。
    * byName: その日出勤している全員の 氏名 -> オブジェクト のMap
    * ojtIndexes: buildOjtIndexes() の戻り値（ojt.csv未読み込み等でnullなら何もしない）
    * state / forbiddenSeatSet / forbiddenPairSet / overflow / placedNames / logs:
@@ -447,6 +461,26 @@ window.SeatTool.algorithm = (function () {
       logs.push({ level: 'warn', message: `${orphanGroup.ownTrainees.join('さん、')}さんの担当教官（${orphanGroup.mentorName}さん）が本日不在で、代わりに担当できる教官も見つからなかったため、OJT対象者のみで配置しました。手動で臨時教官を割り当ててください。` });
     });
 
+    // ---- 2.5th pass: 教官2名・OJT2名のときの組み替え（ver4.16で追加） ----
+    // 出勤している教官が2名・OJT対象者が合計2名で、その内訳が「教官1名がOJT2名を
+    // 担当・もう1名は担当なし」だった場合、教官1名・OJT1名ずつの組み合わせに
+    // 組み替える（どちらのOJT対象者を移すかは指定がないため、2人目を移す）。
+    (function rebalanceTwoMentorsTwoTrainees() {
+      const availableEntries = entries.filter(e => e.available);
+      if (availableEntries.length !== 2) return;
+      const total = availableEntries.reduce((sum, e) => sum + (effectiveTrainees.get(e.mentorName) || []).length, 0);
+      if (total !== 2) return;
+      const loaded = availableEntries.find(e => (effectiveTrainees.get(e.mentorName) || []).length === 2);
+      const empty = availableEntries.find(e => (effectiveTrainees.get(e.mentorName) || []).length === 0);
+      if (!loaded || !empty) return;
+      const moved = effectiveTrainees.get(loaded.mentorName).pop();
+      effectiveTrainees.get(empty.mentorName).push(moved);
+      logs.push({
+        level: 'info',
+        message: `教官2名・OJT対象者2名が出勤しているため、${moved}さんの担当を${loaded.mentorName}さんから${empty.mentorName}さんへ移し、教官1名・OJT1名ずつの組み合わせで配置します。`,
+      });
+    })();
+
     // ---- 3rd pass: 出勤している教官ごとに、実際に担当するOJT対象者
     //      （本人分＋振り分けで引き受けた分。座席の優先順は教官自身のojt.csv設定を使う）で
     //      座席配置を行う。
@@ -455,7 +489,6 @@ window.SeatTool.algorithm = (function () {
     const twoTraineeEntries = entries.filter(e => e.available && (effectiveTrainees.get(e.mentorName) || []).length === 2);
     const oneTraineeEntries = entries.filter(e => e.available && (effectiveTrainees.get(e.mentorName) || []).length === 1);
     const orderedEntries = [...twoTraineeEntries, ...oneTraineeEntries];
-    const pairSeatNumbers = []; // 教官1名・OJT2名の配置で使われた座席番号（教官+OJT一人目側／OJT二人目側の両方）
 
     for (const e of orderedEntries) {
       const traineeNames = effectiveTrainees.get(e.mentorName) || [];
@@ -466,11 +499,10 @@ window.SeatTool.algorithm = (function () {
 
       if (traineeNames.length === 1) {
         const trainee = byName.get(traineeNames[0]);
-        // 既定順（15→12→8→4→他）で見つからなければ、既に配置済みの教官1名・OJT2名の
-        // 座席の同列1つ前を追加候補として試す
-        const upCandidates = ojtAdjacentUpCandidates(pairSeatNumbers);
+        // 既定順（15→12→8→4→3→2→1→他）で探す。ver4.15までは、既に配置済みの
+        // 教官1名・OJT2名の座席の同列1つ前を追加候補として試していたが、
+        // ver4.16で既定順そのものを1番まで伸ばしたため、この追加候補は廃止した。
         const seat = findSharedSeatInOrder(singleOrder, mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet, true)
-          || (upCandidates.length > 0 ? findSharedSeatInOrder(upCandidates, mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet) : null)
           || findSharedSeatAnywhere(mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet);
         if (seat) {
           seatPersonPair(state, seat.key, mentor, trainee);
@@ -486,7 +518,7 @@ window.SeatTool.algorithm = (function () {
       } else if (traineeNames.length === 2) {
         const trainee1 = byName.get(traineeNames[0]);
         const trainee2 = byName.get(traineeNames[1]);
-        const pairOrder = ojtPairOrder(singleOrder);
+        const pairOrder = ojtPairOrder(seatOrder);
         const pair = findOjtPairInOrder(pairOrder, mentor, trainee1, trainee2, state, forbiddenSeatSet, forbiddenPairSet);
         if (pair) {
           seatPersonPair(state, pair.seatA.key, mentor, trainee1);
@@ -494,7 +526,6 @@ window.SeatTool.algorithm = (function () {
           placedNames.add(mentorName);
           placedNames.add(traineeNames[0]);
           placedNames.add(traineeNames[1]);
-          pairSeatNumbers.push(pair.seatA.number, pair.seatB.number);
           noteSeat9IfUsed(pair.seatA, mentorName, '教官・OJT同席（対象座席）', logs);
           noteSeat9IfUsed(pair.seatB, traineeNames[1], '教官・OJT同席（対象座席）', logs);
         } else {
@@ -622,7 +653,7 @@ window.SeatTool.algorithm = (function () {
     let valid = candidates.filter(seat => canPlace(person, seat, state, forbiddenSeatSet, forbiddenPairSet));
     if (valid.length === 0) return null;
     if (avoidAdjacency) {
-      const nonAdjacent = valid.filter(seat => !ADJACENCY[seat.key].some(adjKey => slotOccupants(state[adjKey]).length > 0));
+      const nonAdjacent = valid.filter(seat => !COLUMN_ADJACENCY[seat.key].some(adjKey => slotOccupants(state[adjKey]).length > 0));
       if (nonAdjacent.length > 0) valid = nonAdjacent;
     }
     const preferred = valid.filter(seat => !hasExactBoundaryMatch(person, slotOccupants(state[seat.key])));
@@ -669,15 +700,13 @@ window.SeatTool.algorithm = (function () {
   }
 
   // ============================================================
-  // 隣接禁止の繰り上げ段階（ver4.11で追加）
+  // 隣接禁止の繰り上げ段階（ver4.11で追加。ver4.16で優先順位と上限を変更）
   // 隣接禁止対象者を配置するタイミング（隣接禁止ステップ）を、失敗するたびに
-  // 1段階ずつ前へ繰り上げて再探索するための定義。優先フラグは常に最優先のまま
-  // 動かさない（そのため上限は段階4＝優先フラグの直後）。
-  //   段階0（既定）: 優先フラグ → 新人固定席 → 固定席 → 教官・OJT → 要サポート → 隣接禁止 → 禁止席のみの対象者 → その他
-  //   段階1:         優先フラグ → 新人固定席 → 固定席 → 教官・OJT → 隣接禁止 → 要サポート → 禁止席のみの対象者 → その他
-  //   段階2:         優先フラグ → 新人固定席 → 固定席 → 隣接禁止 → 教官・OJT → 要サポート → 禁止席のみの対象者 → その他
-  //   段階3:         優先フラグ → 新人固定席 → 隣接禁止 → 固定席 → 教官・OJT → 要サポート → 禁止席のみの対象者 → その他
-  //   段階4（上限）: 優先フラグ → 隣接禁止 → 新人固定席 → 固定席 → 教官・OJT → 要サポート → 禁止席のみの対象者 → その他
+  // 1段階ずつ前へ繰り上げて再探索するための定義。優先フラグ・新人固定席・
+  // 教官・OJTより前には繰り上げない（上限は段階2＝教官・OJTの直後）。
+  //   段階0（既定）: 優先フラグ → 新人固定席 → 教官・OJT → 固定席 → 要サポート → 隣接禁止 → 禁止席のみの対象者 → その他
+  //   段階1:         優先フラグ → 新人固定席 → 教官・OJT → 固定席 → 隣接禁止 → 要サポート → 禁止席のみの対象者 → その他
+  //   段階2（上限）: 優先フラグ → 新人固定席 → 教官・OJT → 隣接禁止 → 固定席 → 要サポート → 禁止席のみの対象者 → その他
   // ・「隣接禁止対象者」= secret.csvの隣接禁止に載っている人（禁止席も併せ持つ人を含む）。
   // ・「禁止席のみの対象者」= 禁止席だけに載っている人。ver4.10までは隣接禁止対象者と
   //   一括で全探索していたが、ver4.11からは分離し、要サポートの後（繰り上げ時も同位置）に
@@ -685,7 +714,7 @@ window.SeatTool.algorithm = (function () {
   // ・繰り上げにより隣接禁止ステップが固定席・要サポートより先に来た場合、対象者が
   //   固定席・要サポートの指定席を持っていれば、隣接禁止ステップ内でまずその指定席を
   //   優先候補として試し、使えなければ指定席の条件を外して隣接禁止条件を満たせる座席を探す。
-  const ADJACENT_ESCALATION_MAX_LEVEL = 4;
+  const ADJACENT_ESCALATION_MAX_LEVEL = 2;
 
   /**
    * shiftRows:  [{ name, start, end, startMin, endMin }]  (shift.csv記載順)
@@ -780,12 +809,12 @@ window.SeatTool.algorithm = (function () {
     const baseCtx = { state, overflow, logs, placedNames };
 
     // 優先フラグが同数値のときの並び替えに使う「配置ルール順」
-    // （新人 > 固定席 > 教官・OJT > 要サポート > その他）
+    // （新人 > 教官・OJT > 固定席 > 要サポート > その他。ver4.16で順序変更）
     const rookieNameSet = new Set(rookieRows.map(r => r.name));
     function ruleRank(name) {
       if (rookieNameSet.has(name)) return 0;
-      if (designatedSeatsMap.has(name)) return 1;
-      if (ojtIndexes.isMentor.has(name) || ojtIndexes.isTrainee.has(name)) return 2;
+      if (ojtIndexes.isMentor.has(name) || ojtIndexes.isTrainee.has(name)) return 1;
+      if (designatedSeatsMap.has(name)) return 2;
       if (supportNames.has(name)) return 3;
       return 4;
     }
@@ -828,7 +857,7 @@ window.SeatTool.algorithm = (function () {
 
     // ---- 新人（固定席・2列目）の対象者・順位の決定 ----
     // 「本日出勤していて、優先フラグでまだ配置されていない人」を新人として扱う。
-    // isRookie / rookieRank（バッジ表示用）はここで一度だけ確定させる。繰り上げ段階4で
+    // isRookie / rookieRank（バッジ表示用）はここで一度だけ確定させる。繰り上げの最終段階で
     // 新人固定席ステップが隣接禁止ステップより後に回った場合でも、順位（何番席相当か）は
     // 変わらないようにするため、実際の配置とは切り離してここで決めておく。
     const matchedRookieRows = rookieRows.filter(n => byName.has(n.name) && !placedNames.has(n.name));
@@ -838,31 +867,31 @@ window.SeatTool.algorithm = (function () {
       if (a.degree !== b.degree) return a.degree - b.degree; // 数値が小さいほど新人=優先
       return b.shiftIndex - a.shiftIndex; // 同数値: shift.csvで後ろの行がより新人
     });
-    const rookieTop = rookieCandidates.slice(0, 4);
+    const rookieTop = rookieCandidates.slice(0, ROOKIE_DEFAULT_SEAT_ORDER.length);
     rookieTop.forEach((person, i) => {
       person.rookieRank = i + 1;
       byName.get(person.name).rookieRank = i + 1;
     });
 
-    // ---- 0. 新人（固定席・2列目）の配置 ----
-    // 繰り上げ段階4で隣接禁止ステップが先に来た場合、隣接禁止側で既に配置された
+    // ---- 0. 新人（固定席）の配置 ----
+    // 繰り上げの最終段階で隣接禁止ステップが先に来た場合、隣接禁止側で既に配置された
     // 新人はここでは飛ばす（rookieRankバッジは付いたまま）。
     function stepRookies(ctx) {
       const fallbackQueue = [];
       rookieTop.forEach(person => {
         if (ctx.placedNames.has(person.name)) return;
-        const targetSeat = SEATS.find(s => s.row === person.rookieRank && s.col === 2);
-        // 現状のtargetSeatは常に列2（座席5〜8）のため座席9番になることはないが、
-        // 将来この計算式が変わり座席9番が対象になった場合でも新人固定席として
-        // 明示的に指定された座席として扱われるよう、allowSeat9=trueを渡しておく。
-        if (canPlace(person, targetSeat, ctx.state, forbiddenSeatSet, forbiddenPairSet, true)) {
+        const targetSeatNumber = ROOKIE_DEFAULT_SEAT_ORDER[person.rookieRank - 1];
+        const targetSeat = seatByNumber(targetSeatNumber);
+        // 新人固定席は「新人○番目はこの座席」と明示的に決まっている座席のため、
+        // 仮に座席9番が対象になった場合でも明示指定として扱う（allowSeat9=true）。
+        if (targetSeat && canPlace(person, targetSeat, ctx.state, forbiddenSeatSet, forbiddenPairSet, true)) {
           seatPerson(ctx.state, targetSeat.key, person);
           ctx.placedNames.add(person.name);
           noteSeat9IfUsed(targetSeat, person.name, '新人固定席', ctx.logs);
         } else {
           ctx.logs.push({
             level: 'warn', showDialog: true,
-            message: `${person.name}さんの配置条件をよく確認してください（新人固定席 ${numberOfSeat(person.rookieRank, 2)}番 に配置できません）`,
+            message: `${person.name}さんの配置条件をよく確認してください（新人固定席 ${targetSeatNumber}番 に配置できません）`,
           });
           fallbackQueue.push(person);
         }
@@ -1085,12 +1114,11 @@ window.SeatTool.algorithm = (function () {
 
     // ---- 繰り上げ段階に応じたステップの前後振り分け ----
     // orderedSteps のうち、後ろから escalationLevel 個が「隣接禁止ステップの後」に回る。
-    //   段階0: 前=[新人, 固定席, 教官OJT, 要サポート] / 後=[]
-    //   段階1: 前=[新人, 固定席, 教官OJT] / 後=[要サポート]
-    //   段階2: 前=[新人, 固定席] / 後=[教官OJT, 要サポート]
-    //   段階3: 前=[新人] / 後=[固定席, 教官OJT, 要サポート]
-    //   段階4: 前=[] / 後=[新人, 固定席, 教官OJT, 要サポート]
-    const orderedSteps = [stepRookies, stepDesignated, stepOjt, stepSupport];
+    //   段階0: 前=[新人, 教官OJT, 固定席, 要サポート] / 後=[]
+    //   段階1: 前=[新人, 教官OJT, 固定席] / 後=[要サポート]
+    //   段階2: 前=[新人, 教官OJT] / 後=[固定席, 要サポート]
+    // （教官・OJTより前には繰り上げないため、段階2が上限）
+    const orderedSteps = [stepRookies, stepOjt, stepDesignated, stepSupport];
     const splitIndex = orderedSteps.length - escalationLevel;
     const preSteps = orderedSteps.slice(0, splitIndex);
     const postSteps = orderedSteps.slice(splitIndex);
@@ -1188,10 +1216,10 @@ window.SeatTool.algorithm = (function () {
 
   /**
    * 貪欲法（+MRVによる並び替え）による通常の座席割り当て。詳細はbuildBaseAssignmentと
-   * 各ステップのコメントを参照。全探索（assignSeatsWithEscalation）が段階4まで
+   * 各ステップのコメントを参照。全探索（assignSeatsWithEscalation）が最終段階まで
    * 繰り上げても解けなかった・時間切れだった場合の最終フォールバックとして使う。
    * ver4.13から、呼び出し側（ui.js）はこの最終フォールバック時にoptions.adjacentEscalationLevel
-   * にADJACENT_ESCALATION_MAX_LEVEL（段階4＝優先フラグの直後に隣接禁止）を渡し、
+   * にADJACENT_ESCALATION_MAX_LEVEL（段階2＝教官・OJTの直後に隣接禁止）を渡し、
    * 全探索で最後に試した優先順位のまま貪欲法で配置する。省略時は既定の段階0
    * （通常の優先順位）で配置する。
    * 戻り値: { state, overflow, logs }
@@ -1334,8 +1362,11 @@ window.SeatTool.algorithm = (function () {
    *
    * options:
    *   adjacentEscalationLevel: 隣接禁止ステップの繰り上げ段階（0〜4。省略時0）
-   *   maxSolutions: 最終的に返す上位解の件数（既定20。「次の案」ボタンで一巡できる件数の目安）
+   *   maxSolutions: 最終的に返す上位解の件数（既定20。「別案を表示」ボタンで一巡できる件数の目安）
    *   poolCap:      採点前に内部的に集める解の件数の上限（既定60。多すぎると採点コストが増えるため上限を設ける）
+   *                 ver4.17から、呼び出し側（ui.js）は poolCap = maxSolutions + 1 を渡す。
+   *                 こうすると「maxSolutions件を表示しきってもなお解が残っている」ことを
+   *                 hitPoolCap で正確に判定でき、メッセージの「○通り以上」を厳密に出せる。
    *   timeBudgetMs: 探索の制限時間（既定10000ms=10秒。隣接禁止対象者は通常少人数のはずで、
    *                 実運用では一瞬で解が出る想定）。これを超えたら打ち切り、
    *                 その時点で見つかっている解・部分解で結果を返す（timedOut:trueで示す）
@@ -1350,6 +1381,8 @@ window.SeatTool.algorithm = (function () {
    *   nodesExplored: number,    探索した分岐の数（目安）
    *   elapsedMs: number,        全探索にかかった実時間（ミリ秒）
    *   totalSolutionsFound: number,  poolCap内で実際に見つかった（重複排除後の）解の総数
+   *   hitPoolCap: boolean,          poolCapに到達して探索を打ち切ったか（＝まだ他にも解がある）。
+   *                                 falseなら探索し尽くしたか、時間切れ（timedOut参照）のどちらか。
    *   escalationLevel: number,  この探索で使った繰り上げ段階（0〜4）
    *   preStepOverflowNames: [string],  backtrackより前のステップで「あふれ」に落ちた
    *                             隣接禁止対象者の氏名（通常は空。空でない場合feasible:false）
@@ -1592,6 +1625,7 @@ window.SeatTool.algorithm = (function () {
       nodesExplored,
       elapsedMs: Date.now() - startTime,
       totalSolutionsFound: foundAssignments.length,
+      hitPoolCap: foundAssignments.length >= poolCap,
       escalationLevel,
       preStepOverflowNames,
       solutions: fullResults.slice(0, maxSolutions),
@@ -1608,16 +1642,16 @@ window.SeatTool.algorithm = (function () {
    * まず段階0（通常の優先順位）で assignSeatsExhaustive を実行し、隣接禁止対象者
    * 全員を配置できる解が見つからなかった場合（解なしと証明された場合・制限時間で
    * 打ち切られた場合の両方）は、隣接禁止ステップを1段階前へ繰り上げて再探索する。
-   * これを段階4（優先フラグの直後）まで繰り返す。優先フラグは常に最優先のまま動かさない。
+   * これを段階2（教官・OJTの直後）まで繰り返す。優先フラグ・新人固定席・教官・OJTは常に先のまま動かさない。
    *
    * options は assignSeatsExhaustive と同じ（adjacentEscalationLevelは内部で
    * 上書きするため指定不要。timeBudgetMsは「1段階あたり」の制限時間になる点に注意）。
    *
    * 戻り値: 成功した段階の assignSeatsExhaustive の戻り値に以下を加えたもの:
-   *   escalationLevel: 成功した段階（0〜4）。全段階失敗ならnull
+   *   escalationLevel: 成功した段階（0〜2）。全段階失敗ならnull
    *   attempts: [{ level, feasible, timedOut, preStepOverflowNames, bestPartial, elapsedMs }]
    *     各段階の試行結果（メッセージ表示用）。
-   * 全段階失敗の場合は、最後の段階（段階4）の戻り値に escalationLevel:null と
+   * 全段階失敗の場合は、最後の段階（段階2）の戻り値に escalationLevel:null と
    * attempts を付けたものを返す（呼び出し側で貪欲法にフォールバックする）。
    */
   function assignSeatsWithEscalation(shiftRows, rookieRows, secretRows, options) {
