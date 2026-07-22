@@ -21,7 +21,7 @@
   const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
   const LEADER_ROWS = [1, 2], LEADER_COLS = [1, 2, 3];
 
-  // ■2（全探索backtrack）を「自動配置を実行」の都度、日勤・夜勤それぞれで走らせる際の設定。
+  // 全探索backtrackを「自動配置を実行」の都度、日勤・夜勤それぞれで走らせる際の設定。
   // ver4.11から、隣接禁止の条件を満たせない場合は隣接禁止の優先順位を1段階ずつ
   // 繰り上げて再探索する（assignSeatsWithEscalation。ver4.16から上限は
   // 教官・OJTの直後＝段階2まで）。
@@ -83,7 +83,7 @@
     // ojt.csvのパース結果とインデックス（教官・OJTのバッジ再計算・違反チェックに使用。
     // secret.csvと同様、保存ファイルには含めず、読み込み時にojt.csvから作り直す）
     ojtRows: null, ojtIndexes: null,
-    // ■2（全探索backtrack）の結果（ver4.8で追加）。「自動配置を実行」のたびに作り直す。
+    // 全探索backtrackの結果（ver4.8で追加）。「自動配置を実行」のたびに作り直す。
     // { feasible, timedOut, totalSolutionsFound, solutions:[...], bestPartial, context, index }
     // 保存データの読み込み時や、隣接禁止対象者が0名などで解が1件しかない場合はnull。
     dayExhaustive: null, nightExhaustive: null,
@@ -112,7 +112,7 @@
     nightOverflowList: document.getElementById('night-overflow-list'),
     nightOverflowAppend: document.getElementById('night-overflow-append'),
   };
-  // ■2（全探索backtrack）の「候補」パネル（日勤・夜勤それぞれ）
+  // 全探索backtrackの「候補」パネル（日勤・夜勤それぞれ）
   const candidateEls = {
     day: {
       inner: document.getElementById('day-candidate-inner'),
@@ -195,7 +195,7 @@
     appState.secretRows = secretParsed.rows;
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
-    // ■2の候補は旧secret.csvの内容で計算済みのため、ここでは無効化する
+    // 全探索backtrackの候補は旧secret.csvの内容で計算済みのため、ここでは無効化する
     // （「次案を表示」「一部シャッフル」ボタンを押すと矛盾した内容になってしまうため）
     appState.dayExhaustive = null;
     appState.nightExhaustive = null;
@@ -394,7 +394,7 @@
   }
 
   // ---------- 自動配置の実行 ----------
-  // ■2（全探索backtrack＋繰り上げ再探索）の結果から、従来の assignSeats と同じ形
+  // 全探索backtrack（＋繰り上げ再探索）の結果から、従来の assignSeats と同じ形
   // （{state, overflow, logs}）を作る。解けた場合はスコア最上位の解を採用し、
   // どの段階でも解けなかった場合は greedyFallback()
   // （＝従来の貪欲+MRV assignSeats）の結果を使う。どちらの場合も、状況を allLogs に積む。
@@ -512,7 +512,7 @@
 
     // --- 日勤 ---
     // 教官・OJT（新人固定席の次・固定席より前の優先順位）は assignSeats / assignSeatsWithEscalation 内で処理する。
-    // 隣接禁止対象者の配置は、まず■2（全探索backtrack）で解けるかどうかを試す。
+    // 隣接禁止対象者の配置は、まず全探索backtrackで解けるかどうかを試す。
     // ver4.11から、通常の優先順位（段階0）で解けない場合は隣接禁止の優先順位を
     // 1段階ずつ繰り上げて再探索する（教官・OJTの直後＝段階2まで。優先フラグ・
     // 新人固定席・教官・OJTは常に先のまま）。いずれかの段階で解けた場合はその最良解（スコア最上位）を
@@ -557,7 +557,7 @@
     //    隣接するのは許容）。座席側に回った「夜勤GL席」指定者にはバッジが付く。
     //    夜勤は教官・OJTの役席・GL振り替え（splitDayRows側の分岐）は行わないが、
     //    OP同士の教官・OJTペア自体はここでも同じロジックが動く（実害はない前提）。
-    //    隣接禁止対象者の配置は日勤と同様、まず■2（全探索backtrack）を試し、
+    //    隣接禁止対象者の配置は日勤と同様、まず全探索backtrackを試し、
     //    解けない場合は隣接禁止の優先順位を繰り上げて再探索する（ver4.11）。
     const nightExhaustiveOptions = {
       nightContext: true, ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS,
@@ -774,7 +774,7 @@
     return span;
   }
 
-  // highlighted=true のとき、■2の「次案を表示」「一部シャッフル」ボタンで
+  // highlighted=true のとき、全探索backtrackの「次案を表示」「一部シャッフル」ボタンで
   // このカードの人が直前の表示から座席を変えたことを示す、一瞬光るハイライトを付ける
   // （CSS側のアニメーションで数秒かけて自然に消える。状態としては保持しない）。
   function createPersonCard(loc, person, highlighted) {
@@ -1067,7 +1067,7 @@
 
   // 座席グリッド（全15席）を描画する。日勤（locType='seat'）と夜勤（locType='nightSeat'）で共用。
   // changedNames が渡された場合、そこに含まれる氏名のカードにハイライトを付ける
-  // （■2の「次案を表示」「一部シャッフル」ボタンで直前と座席が変わった人を示す）。
+  // （全探索backtrackの「次案を表示」「一部シャッフル」ボタンで直前と座席が変わった人を示す）。
   function renderSeatGrid(gridEl, locType, changedNames) {
     const grid = gridEl;
     grid.innerHTML = '';
@@ -1155,7 +1155,7 @@
     els.nightDateLabel.textContent = suffix;
   }
 
-  // dayChangedNames / nightChangedNames（省略可、Set<string>）: ■2の
+  // dayChangedNames / nightChangedNames（省略可、Set<string>）: 全探索backtrackの
   // 「次案を表示」「一部シャッフル」ボタンから呼ばれたときだけ渡される。渡された氏名の
   // カードに一瞬ハイライトを付ける（ドラッグ操作や✎編集など、それ以外からの
   // render()呼び出しでは何も渡さないため、ハイライトは付かない）。
@@ -1173,7 +1173,7 @@
     renderCandidatePanel('night', appState.nightExhaustive);
   }
 
-  // ---------- ■2（全探索backtrack）候補パネル（ver4.8で追加） ----------
+  // ---------- 全探索backtrack：候補パネル（ver4.8で追加） ----------
 
   // 座席表(state)から「氏名 -> 座席key」のMapを作る（差分検出用）
   function collectSeatAssignments(state) {
@@ -1185,7 +1185,7 @@
   }
 
   // 2つの座席表を比べて、座席が変わった（またはあふれに落ちた/あふれから復帰した）
-  // 人の氏名の集合を返す。■2の「次案を表示」「一部シャッフル」ボタンで、
+  // 人の氏名の集合を返す。全探索backtrackの「次案を表示」「一部シャッフル」ボタンで、
   // 直前の表示と比べて何が変わったかを示すために使う。
   function diffChangedNames(prevState, nextState) {
     const prev = collectSeatAssignments(prevState);
@@ -1200,7 +1200,7 @@
     return changed;
   }
 
-  // 候補パネル（日勤 or 夜勤）の表示を更新する。exがnull（■2が解けなかった/
+  // 候補パネル（日勤 or 夜勤）の表示を更新する。exがnull（全探索backtrackが解けなかった/
   // まだ自動配置していない/保存データを読み込んだ直後）ならパネルごと隠す。
   // 「次案を表示」は隣接禁止対象者側の候補が1件しかない場合は押しても意味がないため
   // 無効化する。「一部シャッフル」は候補数によらず常に押せる（禁止席・その他側の
@@ -1793,7 +1793,7 @@
     reapplyBadges();
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
     appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
-    // 保存データには■2（全探索backtrack）の候補情報は含まれないため、
+    // 保存データには全探索backtrackの候補情報は含まれないため、
     // 読み込み時は候補パネルを非表示に戻す（「次案を表示」「一部シャッフル」ボタンは、
     // 直前に「自動配置を実行」した内容にのみ対応しているため）。
     appState.dayExhaustive = null;

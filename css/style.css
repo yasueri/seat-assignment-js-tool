@@ -160,12 +160,6 @@
     flex-wrap:wrap;
     max-width:100%;
   }
-  .save-load-row{
-    margin:16px 0 0;
-  }
-  .save-load-row button{
-    padding:9px 16px;
-  }
   .date-picker-label{
     font-size:15px;
     font-weight:600;
@@ -657,13 +651,7 @@
     font-size:14px;
     color:#C79A94;
   }
-  .footer-note{
-    font-size:14px;
-    color:var(--text-muted);
-    margin-top:12px;
-  }
-
-  /* ■2（全探索backtrack）候補パネル（「次の案」「その他だけシャッフル」ボタン。ver4.8で追加） */
+  /* 全探索backtrack：候補パネル（「次案を表示」「候補1に戻す」「一部シャッフル」ボタン。ver4.8で追加） */
   .candidate-panel{
     width:190px;
     flex:none;
@@ -686,7 +674,7 @@
     font-family:var(--font-mono);
   }
   /* 候補欄の下に出す「同格グループ」ラベル（ver4.17）。先頭の案と同格なら
-     通常色、①指定席・②境界同席の点で劣る案では注意色にして気づけるようにする */
+     通常色、①指定席・②同時刻入替の点で劣る案では注意色にして気づけるようにする */
   .candidate-note{
     font-size:12px;
     line-height:1.35;
@@ -718,7 +706,7 @@
     cursor:not-allowed;
   }
 
-  /* ■2の「次案を表示」「一部シャッフル」ボタンで、直前の表示から座席が
+  /* 全探索backtrackの「次案を表示」「一部シャッフル」ボタンで、直前の表示から座席が
      変わった人のカードを一瞬光らせるハイライト（数秒かけて自然に消える） */
   .person-card.candidate-changed{
     animation: candidateChangedFade 2.4s ease forwards;
