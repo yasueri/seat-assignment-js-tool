@@ -2,6 +2,9 @@
 // csv.js
 // CSVの読み書きと、shift.csv / rookie.csv / secret.csv / ojt.csv それぞれの
 // 解析・バリデーションを担当する。
+// 月間シフトCSVは、同日・同一氏名でも時間帯が重ならなければ複数行を受け入れる
+// （同日2回勤務＝応援勤務。ver4.18で追加）。重なる場合のみ従来どおりerrorで弾く。
+// 受け入れた各行には pkey（氏名|開始時刻）を付与し、下流で1件ずつ区別できるようにする。
 // 他ファイルからは window.SeatTool.csv 経由で利用する。
 // ============================================================
 window.SeatTool = window.SeatTool || {};
@@ -107,7 +110,9 @@ window.SeatTool.csv = (function () {
 
     const dataRows = raw.slice(1);
     const result = [];
-    const seenKeys = new Set(); // "日付|氏名" の重複チェック
+    // "日付|氏名" -> その日その人の受け入れ済み勤務時間帯の配列。
+    // 同日2回勤務の時間重複判定に使う。〈ver4.18で Set から Map に変更〉
+    const seenShifts = new Map();
     const dateSet = new Set();
 
     dataRows.forEach((r, i) => {
@@ -145,12 +150,28 @@ window.SeatTool.csv = (function () {
         logs.push({ level: 'warn', message: `${rowLabel}: 役割「${role}」は認識できません（役席・GL・OPのいずれか）。読み飛ばしました（${name}）` });
         return;
       }
+      // 同日・同一氏名の複数行（同日2回勤務）の扱い。〈ver4.18で変更〉
+      // 応援勤務などで、1人が同じ日に間の空いた別々の時間帯で出勤することがある。
+      // 時間帯が重ならなければ両方とも受け入れ、両方とも座席配置の対象にする。
+      // 時間帯が重なる場合は明らかな入力ミスとみなし、従来どおりerrorで弾く。
       const key = `${date}|${name}`;
-      if (seenKeys.has(key)) {
-        logs.push({ level: 'error', message: `${rowLabel}: ${date}の「${name}」が複数回記載されています。最初の行のみ使用します。` });
-        return;
+      const previous = seenShifts.get(key);
+      if (previous) {
+        const conflict = previous.find(
+          prev => startMin < prev.endMin && prev.startMin < endMin
+        );
+        if (conflict) {
+          logs.push({ level: 'error', message: `${rowLabel}: ${date}の「${name}」が時間帯の重なる勤務として複数回記載されています（${conflict.start}-${conflict.end} / ${start}-${end}）。この行は読み飛ばしました。` });
+          return;
+        }
+        // 重なりなし＝受け入れる。例外的な勤務のため注意は促す。
+        const allTimes = [...previous, { start, end }]
+          .map(s => `${s.start}-${s.end}`).join(' / ');
+        logs.push({ level: 'warn', message: `${date}の「${name}」が${previous.length + 1}回出勤として登録されています（${allTimes}）。応援勤務でなければ入力をご確認ください。` });
+        previous.push({ start, end, startMin, endMin });
+      } else {
+        seenShifts.set(key, [{ start, end, startMin, endMin }]);
       }
-      seenKeys.add(key);
 
       const frontOT = parseBoolFlag(frontRaw, name, '前残業', rowLabel, logs);
       const backOT = parseBoolFlag(backRaw, name, '後残業', rowLabel, logs);
@@ -158,6 +179,11 @@ window.SeatTool.csv = (function () {
       dateSet.add(date);
       result.push({
         date, name, start, end, startMin, endMin, role, frontOT, backOT,
+        // 同日2回勤務を区別するための識別子。〈ver4.18で追加〉
+        // 同日・同一氏名で開始時刻が重複することはない（重なる勤務はerrorで弾くため）
+        // ので、氏名＋開始時刻で一意になる。氏名だけをキーにしている箇所を
+        // これに置き換えることで、2回勤務の2件が互いを上書きしなくなる。
+        pkey: `${name}|${start}`,
         nightShift: isNightShift(startMin, endMin),
         lateShift: isLateShift(startMin, frontOT),
       });

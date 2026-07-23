@@ -10,6 +10,11 @@
 // （ver4.12で追加。findFeasibleAssignment参照。全探索側でのみ有効。
 // 貪欲+MRV assignSeatsのフォールバック時は従来どおり貪欲のまま）も含む。
 // CSVの形式やDOMには一切依存しない（テストしやすくするため）。
+// 同日2回勤務（1人が同じ日に重ならない別々の時間帯で出勤する応援勤務）に対応
+// （ver4.18で追加）。人物の同一性は氏名ではなく pkey（氏名|開始時刻）で判定する。
+// 座席側の識別子 seat.key と紛らわしくならないよう、人物側は pkey という名前にしてある。
+// ただし ojt.csv / rookie.csv / secret.csv は氏名で人を指すため、それらの照合には
+// 引き続き byName（氏名 -> 人）を使う。座席の配置・復元には byKey（pkey -> 人）を使う。
 // 他ファイルからは window.SeatTool.algorithm 経由で利用する。
 // ============================================================
 window.SeatTool = window.SeatTool || {};
@@ -421,8 +426,13 @@ window.SeatTool.algorithm = (function () {
       const mentor = byName.get(mentorName) || null;
       // 教官自身が既に他の優先ルール（固定席）で配置済みの場合は、教官・OJTの
       // 特別な同席処理には使えないため、不在の教官と同様に扱う
-      const available = !!mentor && !placedNames.has(mentorName);
-      const ownTrainees = (ojtIndexes.traineesOf.get(mentorName) || []).filter(t => byName.has(t) && !placedNames.has(t));
+      // placedNamesはpkey（氏名|開始時刻）で持つため、氏名から人を引いてから判定する。
+      // 〈ver4.18。教官・OJT対象者は同日2回勤務の対象外という前提〉
+      const available = !!mentor && !placedNames.has(mentor.pkey);
+      const ownTrainees = (ojtIndexes.traineesOf.get(mentorName) || []).filter(t => {
+        const person = byName.get(t);
+        return !!person && !placedNames.has(person.pkey);
+      });
       return { mentorName, mentor, available, ownTrainees };
     });
 
@@ -457,7 +467,7 @@ window.SeatTool.algorithm = (function () {
           logs.push({ level: 'error', showDialog: true, message: `${traineeName}さんを配置できません。配置ルールに矛盾がある可能性があります。` });
           overflow.push(trainee);
         }
-        placedNames.add(traineeName);
+        placedNames.add(trainee.pkey);
       });
       logs.push({ level: 'warn', message: `${orphanGroup.ownTrainees.join('さん、')}さんの担当教官（${orphanGroup.mentorName}さん）が本日不在で、代わりに担当できる教官も見つからなかったため、OJT対象者のみで配置しました。手動で臨時教官を割り当ててください。` });
     });
@@ -507,8 +517,8 @@ window.SeatTool.algorithm = (function () {
           || findSharedSeatAnywhere(mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet);
         if (seat) {
           seatPersonPair(state, seat.key, mentor, trainee);
-          placedNames.add(mentorName);
-          placedNames.add(traineeNames[0]);
+          placedNames.add(mentor.pkey);
+          placedNames.add(trainee.pkey);
           noteSeat9IfUsed(seat, mentorName, '教官・OJT同席（対象座席）', logs);
         } else {
           // 15席すべて埋まっている等、極めて稀なケース。教官・OJTをそれぞれ独立に配置する
@@ -524,9 +534,9 @@ window.SeatTool.algorithm = (function () {
         if (pair) {
           seatPersonPair(state, pair.seatA.key, mentor, trainee1);
           seatOjtTraineeAlone(state, pair.seatB.key, trainee2);
-          placedNames.add(mentorName);
-          placedNames.add(traineeNames[0]);
-          placedNames.add(traineeNames[1]);
+          placedNames.add(mentor.pkey);
+          placedNames.add(trainee1.pkey);
+          placedNames.add(trainee2.pkey);
           noteSeat9IfUsed(pair.seatA, mentorName, '教官・OJT同席（対象座席）', logs);
           noteSeat9IfUsed(pair.seatB, traineeNames[1], '教官・OJT同席（対象座席）', logs);
         } else {
@@ -699,7 +709,7 @@ window.SeatTool.algorithm = (function () {
       });
       overflow.push(person);
     }
-    placedNames.add(person.name);
+    placedNames.add(person.pkey);
   }
 
   // ============================================================
@@ -769,6 +779,10 @@ window.SeatTool.algorithm = (function () {
 
     const people = shiftRows.map((r, idx) => ({
       name: r.name, start: r.start, end: r.end,
+      // 同日2回勤務を区別する識別子。〈ver4.18で追加〉
+      // 通常はcsv.jsが付与する「氏名|開始時刻」。保存データの復元や、
+      // pkeyを持たない古い呼び出し元から渡された場合はここで補完する。
+      pkey: r.pkey || `${r.name}|${r.start}`,
       startMin: r.startMin, endMin: r.endMin, shiftIndex: idx,
       frontOT: !!r.frontOT, backOT: !!r.backOT,
       // 役割（役席/GL/OP）。座席グリッドに来るのは基本OPだが、夜勤では役席・GLの
@@ -796,7 +810,13 @@ window.SeatTool.algorithm = (function () {
       // 優先フラグ（secret.csv5列目）。バッジ表示はしないが、デバッグ・参照用に保持
       priorityFlag: priorityFlagMap.has(r.name) ? priorityFlagMap.get(r.name) : null,
     }));
+    // 氏名 -> オブジェクト。ojt.csv / rookie.csv / secret.csv は氏名で人を指すため、
+    // それらの照合には引き続きこのMapを使う。〈同日2回勤務では後の1件が前を上書き
+    // するが、2回勤務者はこれらのCSVの対象外という前提のため実害はない。ver4.18〉
     const byName = new Map(people.map(p => [p.name, p]));
+    // pkey（氏名|開始時刻）-> オブジェクト。〈ver4.18で追加〉
+    // 同日2回勤務でも1件ずつ別人として引ける。座席の配置・復元にはこちらを使う。
+    const byKey = new Map(people.map(p => [p.pkey, p]));
 
     // ---- 事前の矛盾検知（静的にわかる範囲）。配置を試みる前にまとめて報告する ----
     const staticProblems = detectStaticContradictions(
@@ -848,7 +868,7 @@ window.SeatTool.algorithm = (function () {
           : null;
         if (seat) {
           seatPerson(ctx.state, seat.key, person);
-          ctx.placedNames.add(person.name);
+          ctx.placedNames.add(person.pkey);
           const ruleLabel = (designatedSeatsMap.get(person.name) || []).includes(seat.key) ? '固定席' : '要サポート';
           noteSeat9IfUsed(seat, person.name, ruleLabel, ctx.logs);
         } else {
@@ -865,7 +885,10 @@ window.SeatTool.algorithm = (function () {
     // isRookie / rookieRank（バッジ表示用）はここで一度だけ確定させる。繰り上げの最終段階で
     // 新人固定席ステップが隣接禁止ステップより後に回った場合でも、順位（何番席相当か）は
     // 変わらないようにするため、実際の配置とは切り離してここで決めておく。
-    const matchedRookieRows = rookieRows.filter(n => byName.has(n.name) && !placedNames.has(n.name));
+    const matchedRookieRows = rookieRows.filter(n => {
+      const person = byName.get(n.name);
+      return !!person && !placedNames.has(person.pkey);
+    });
     matchedRookieRows.forEach(n => { byName.get(n.name).isRookie = true; });
     const rookieCandidates = matchedRookieRows.map(n => ({ ...byName.get(n.name), degree: n.degree }));
     rookieCandidates.sort((a, b) => {
@@ -884,14 +907,14 @@ window.SeatTool.algorithm = (function () {
     function stepRookies(ctx) {
       const fallbackQueue = [];
       rookieTop.forEach(person => {
-        if (ctx.placedNames.has(person.name)) return;
+        if (ctx.placedNames.has(person.pkey)) return;
         const targetSeatNumber = ROOKIE_DEFAULT_SEAT_ORDER[person.rookieRank - 1];
         const targetSeat = seatByNumber(targetSeatNumber);
         // 新人固定席は「新人○番目はこの座席」と明示的に決まっている座席のため、
         // 仮に座席9番が対象になった場合でも明示指定として扱う（allowSeat9=true）。
         if (targetSeat && canPlace(person, targetSeat, ctx.state, forbiddenSeatSet, forbiddenPairSet, true)) {
           seatPerson(ctx.state, targetSeat.key, person);
-          ctx.placedNames.add(person.name);
+          ctx.placedNames.add(person.pkey);
           noteSeat9IfUsed(targetSeat, person.name, '新人固定席', ctx.logs);
         } else {
           ctx.logs.push({
@@ -913,7 +936,7 @@ window.SeatTool.algorithm = (function () {
     // 先に配置してしまうと、候補1つの人が行き場を失ってしまう可能性があるため。
     // 優先フラグ・新人など、より優先順位の高いステップで既に配置済みの人は除く。
     function stepDesignated(ctx) {
-      const designatedPeople = people.filter(p => designatedSeatsMap.has(p.name) && !ctx.placedNames.has(p.name));
+      const designatedPeople = people.filter(p => designatedSeatsMap.has(p.name) && !ctx.placedNames.has(p.pkey));
       designatedPeople.sort((a, b) => {
         const countA = designatedSeatsMap.get(a.name).length;
         const countB = designatedSeatsMap.get(b.name).length;
@@ -929,7 +952,7 @@ window.SeatTool.algorithm = (function () {
         const seat = findSeatInGivenOrder(candidateSeats, person, ctx.state, forbiddenSeatSet, forbiddenPairSet);
         if (seat) {
           seatPerson(ctx.state, seat.key, person);
-          ctx.placedNames.add(person.name);
+          ctx.placedNames.add(person.pkey);
           noteSeat9IfUsed(seat, person.name, '固定席', ctx.logs);
         } else {
           ctx.logs.push({
@@ -950,7 +973,7 @@ window.SeatTool.algorithm = (function () {
     // ---- 3. 要サポート（固定席と同じ入力・並び順のルール。専用の座席指定がある点も同じ） ----
     // より先に実行されたステップで既に配置済みの人は除く。
     function stepSupport(ctx) {
-      const supportPeople = people.filter(p => supportSeatsMap.has(p.name) && !ctx.placedNames.has(p.name));
+      const supportPeople = people.filter(p => supportSeatsMap.has(p.name) && !ctx.placedNames.has(p.pkey));
       supportPeople.sort((a, b) => {
         const countA = supportSeatsMap.get(a.name).length;
         const countB = supportSeatsMap.get(b.name).length;
@@ -964,7 +987,7 @@ window.SeatTool.algorithm = (function () {
         const seat = findSeatInGivenOrder(candidateSeats, person, ctx.state, forbiddenSeatSet, forbiddenPairSet);
         if (seat) {
           seatPerson(ctx.state, seat.key, person);
-          ctx.placedNames.add(person.name);
+          ctx.placedNames.add(person.pkey);
           noteSeat9IfUsed(seat, person.name, '要サポート', ctx.logs);
         } else {
           ctx.logs.push({
@@ -1024,9 +1047,9 @@ window.SeatTool.algorithm = (function () {
         const rest = rem.slice(0, bestIdx).concat(rem.slice(bestIdx + 1));
         for (const seat of bestCandidates) {
           seatPerson(state, seat.key, person);
-          assignedMap.set(person.name, seat.key);
+          assignedMap.set(person.pkey, seat.key);
           search(rest, assignedMap);
-          assignedMap.delete(person.name);
+          assignedMap.delete(person.pkey);
           const slots = state[seat.key];
           const idx = slots.indexOf(person);
           if (idx !== -1) slots[idx] = null;
@@ -1056,7 +1079,7 @@ window.SeatTool.algorithm = (function () {
     //   複数の有効な組み合わせがある場合にランダムに切り替わるようにする。
     function placeForbiddenOnlyGroup(ctx, deterministic, mode, clock, seatsOrder) {
       const group = people.filter(p =>
-        p.hasForbiddenSeatRule && !p.hasAdjacentRule && !ctx.placedNames.has(p.name));
+        p.hasForbiddenSeatRule && !p.hasAdjacentRule && !ctx.placedNames.has(p.pkey));
       if (group.length === 0) return;
 
       // ---- 事前の矛盾検知（動的な範囲）----
@@ -1096,9 +1119,9 @@ window.SeatTool.algorithm = (function () {
 
       const result = findFeasibleAssignment(group, ctx.state, seatsOrder || SEATS, forbiddenSeatSet, forbiddenPairSet, clock);
       if (result.solution) {
-        for (const [name, seatKey] of result.solution.entries()) {
-          seatPerson(ctx.state, seatKey, byName.get(name));
-          ctx.placedNames.add(name);
+        for (const [pkey, seatKey] of result.solution.entries()) {
+          seatPerson(ctx.state, seatKey, byKey.get(pkey));
+          ctx.placedNames.add(pkey);
         }
         return;
       }
@@ -1151,7 +1174,7 @@ window.SeatTool.algorithm = (function () {
     // ---- 隣接禁止対象者と、その優先候補座席（固定席・要サポートの指定席） ----
     // ここまでのステップで配置されなかった隣接禁止対象者。これをどう配置するかは
     // 呼び出し側に委ねる（assignSeatsなら貪欲+MRV、assignSeatsExhaustiveなら全探索backtrack）。
-    const adjacencyPeople = people.filter(p => p.hasAdjacentRule && !placedNames.has(p.name));
+    const adjacencyPeople = people.filter(p => p.hasAdjacentRule && !placedNames.has(p.pkey));
     // 繰り上げにより固定席・要サポートのステップが後回しになった場合、対象者の
     // 指定席は隣接禁止ステップ内で「まず試す優先候補」として扱う（使えなければ
     // 指定席の条件を外して探索する）。noteSeat9IfUsed用のルール名も併せて持つ。
@@ -1180,7 +1203,7 @@ window.SeatTool.algorithm = (function () {
     }
 
     return {
-      state, overflow, logs, placedNames, people, byName,
+      state, overflow, logs, placedNames, people, byName, byKey,
       forbiddenSeatSet, forbiddenPairSet, priorityNames,
       adjacencyPeople, preferredSeatsOf, preferredLabelOf,
       runPostSteps, runPostponedSteps, placeForbiddenGroup: placeForbiddenOnlyGroup,
@@ -1213,7 +1236,7 @@ window.SeatTool.algorithm = (function () {
   // その他スタッフが無関係に動き回らないようにするための決定的モード。
   // 省略時はfalse（従来どおりランダム＝通常のassignSeatsの挙動）。
   function placeOthers(people, placedNames, state, forbiddenSeatSet, forbiddenPairSet, overflow, logs, nightContext, deterministic) {
-    const others = people.filter(p => !placedNames.has(p.name));
+    const others = people.filter(p => !placedNames.has(p.pkey));
     others.sort(byStartTimeThenLaterRowFirst);
     for (const person of others) {
       placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, true, nightContext, deterministic);
@@ -1277,7 +1300,7 @@ window.SeatTool.algorithm = (function () {
         : null;
       if (preferredSeat) {
         seatPerson(state, preferredSeat.key, best);
-        placedNames.add(best.name);
+        placedNames.add(best.pkey);
         notePreferredSeatOutcome(base, best.name, preferredSeat.key, logs);
       } else {
         placeOrOverflow(best, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, nightContext);
@@ -1435,7 +1458,7 @@ window.SeatTool.algorithm = (function () {
 
     const base = buildBaseAssignment(shiftRows, rookieRows, secretRows, options);
     const {
-      state: baseState, placedNames: basePlacedNames, people, byName,
+      state: baseState, placedNames: basePlacedNames, people, byName, byKey,
       forbiddenSeatSet, forbiddenPairSet, adjacencyPeople, nightContext,
       overflow: baseOverflow, logs: baseLogs, escalationLevel,
     } = base;
@@ -1546,11 +1569,11 @@ window.SeatTool.algorithm = (function () {
 
       for (const seat of orderCandidates(person, bestCandidates)) {
         seatPerson(searchState, seat.key, person);
-        assignedMap.set(person.name, seat.key);
+        assignedMap.set(person.pkey, seat.key);
 
         search(rest, assignedMap);
 
-        assignedMap.delete(person.name);
+        assignedMap.delete(person.pkey);
         const slots = searchState[seat.key];
         const idx = slots.indexOf(person);
         if (idx !== -1) slots[idx] = null;
@@ -1585,14 +1608,19 @@ window.SeatTool.algorithm = (function () {
       };
       // 指定席（固定席・要サポート）どおりに配置できなかった対象者の人数（採点用）
       let preferredMiss = 0;
-      for (const [name, seatKey] of assignedMap.entries()) {
-        seatPerson(ctx.state, seatKey, byName.get(name));
-        ctx.placedNames.add(name);
-        if (base.preferredSeatsOf.has(name)) {
-          const prefKeys = preferredKeySetOf.get(name);
+      // assignedMapはpkey（氏名|開始時刻）で持つ。〈ver4.18〉
+      // 一方、固定席・要サポートの指定（secret.csv）は氏名で紐づいたままのため、
+      // preferredSeatsOf / preferredKeySetOf の参照には人の氏名を使う。
+      for (const [pkey, seatKey] of assignedMap.entries()) {
+        const person = byKey.get(pkey);
+        if (!person) continue;
+        seatPerson(ctx.state, seatKey, person);
+        ctx.placedNames.add(pkey);
+        if (base.preferredSeatsOf.has(person.name)) {
+          const prefKeys = preferredKeySetOf.get(person.name);
           if (!prefKeys.has(seatKey)) preferredMiss++;
         }
-        notePreferredSeatOutcome(base, name, seatKey, ctx.logs);
+        notePreferredSeatOutcome(base, person.name, seatKey, ctx.logs);
       }
 
       // 繰り上げで後回しになったステップ（要サポート等）を配置する

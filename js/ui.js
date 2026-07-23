@@ -374,6 +374,8 @@
     dayRows.forEach(r => {
       const base = {
         name: r.name, start: r.start, end: r.end, startMin: r.startMin, endMin: r.endMin,
+        // 同日2回勤務を区別する識別子（csv.jsが付与）。〈ver4.18〉
+        pkey: r.pkey || `${r.name}|${r.start}`,
         frontOT: r.frontOT, backOT: r.backOT,
       };
       if (r.nightShift) {
@@ -967,6 +969,8 @@
       const updated = {
         ...person,
         name: newName, start: newStart, end: newEnd, startMin, endMin,
+        // 氏名・開始時刻が変わりうるため、識別子も作り直す。〈ver4.18〉
+        pkey: `${newName}|${newStart}`,
         ...deriveBadgeFields(newName),
       };
       setPersonAt(loc, updated);
@@ -1056,7 +1060,7 @@
     const person = getPersonAt(loc);
     if (person) {
       slot.classList.add('filled');
-      const highlighted = !!(changedNames && changedNames.has(person.name));
+      const highlighted = !!(changedNames && changedNames.has(person.pkey || `${person.name}|${person.start}`));
       slot.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person, highlighted));
     } else {
       slot.textContent = '空席';
@@ -1139,7 +1143,7 @@
         const loc = { type: locType, index: i };
         const wrapper = document.createElement('div');
         wrapper.className = 'overflow-slot';
-        const highlighted = !!(changedNames && changedNames.has(person.name));
+        const highlighted = !!(changedNames && changedNames.has(person.pkey || `${person.name}|${person.start}`));
         wrapper.appendChild(locEquals(loc, editingLoc) ? createEditForm(loc, person) : createPersonCard(loc, person, highlighted));
         makeDropTarget(wrapper, loc);
         list.appendChild(wrapper);
@@ -1179,7 +1183,9 @@
   function collectSeatAssignments(state) {
     const map = new Map();
     for (const s of SEATS) {
-      state[s.key].forEach(p => { if (p) map.set(p.name, s.key); });
+      // 同日2回勤務の人は同じ氏名で2席に座るため、氏名だけでは差分が正しく取れない。
+      // 氏名＋開始時刻（pkey相当）をキーにする。〈ver4.18〉
+      state[s.key].forEach(p => { if (p) map.set(p.pkey || `${p.name}|${p.start}`, s.key); });
     }
     return map;
   }
@@ -1533,6 +1539,9 @@
     if (!p) return null;
     return {
       name: p.name, start: p.start, end: p.end,
+      // 同日2回勤務の識別子。〈ver4.18で追加。古い保存ファイルには無いが、
+      // 復元時にsanitizePersonが氏名＋開始時刻から補完する〉
+      pkey: typeof p.pkey === 'string' && p.pkey ? p.pkey : `${p.name}|${p.start}`,
       frontOT: !!p.frontOT, backOT: !!p.backOT,
       role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
       isRookie: !!p.isRookie,
@@ -1664,6 +1673,10 @@
     }
     return {
       name, start, end, startMin, endMin,
+      // 同日2回勤務を区別する識別子。〈ver4.18で追加〉
+      // 既存の保存ファイルにはpkeyが無いため、氏名＋開始時刻から補完する
+      // （csv.js側と同じ組み立て方のため、同じ値になる）。
+      pkey: typeof p.pkey === 'string' && p.pkey ? p.pkey : `${name}|${start}`,
       frontOT: !!p.frontOT, backOT: !!p.backOT,
       role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
       isRookie: !!p.isRookie,
