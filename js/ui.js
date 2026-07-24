@@ -14,7 +14,7 @@
   const {
     SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
     buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
-    seatByNumber, numberOfKey, numberOfSeat, buildOjtIndexes,
+    seatByNumber, numberOfKey, numberOfSeat, buildOjtIndexes, buildRookieIndexes,
     assignSeatsWithEscalation, reshuffleForbiddenAndOthers, ADJACENT_ESCALATION_MAX_LEVEL,
   } = NS.algorithm;
 
@@ -22,20 +22,20 @@
   const LEADER_ROWS = [1, 2], LEADER_COLS = [1, 2, 3];
 
   // 全探索backtrackを「自動配置を実行」の都度、日勤・夜勤それぞれで走らせる際の設定。
-  // ver4.11から、隣接禁止の条件を満たせない場合は隣接禁止の優先順位を1段階ずつ
-  // 繰り上げて再探索する（assignSeatsWithEscalation。ver4.16から上限は
+  // ver0.4.11から、隣接禁止の条件を満たせない場合は隣接禁止の優先順位を1段階ずつ
+  // 繰り上げて再探索する（assignSeatsWithEscalation。ver0.4.16から上限は
   // 教官・OJTの直後＝段階2まで）。
   // タイムアウトは「1段階あたり」の制限時間で、時間切れの段階があっても次の段階へ進む。
   // 実測では、解が存在するケースは全探索が0.5秒以内に終わる（解が多いほどpoolCapで
   // 早く打ち切られるため速い）。時間がかかるのは「解が存在しない」ケースだけで、
-  // その場合は制限時間で打ち切って次の段階へ繰り上げればよいため、ver4.17で
+  // その場合は制限時間で打ち切って次の段階へ繰り上げればよいため、ver0.4.17で
   // 10秒→5秒に短縮した（解ありケースに対して10倍以上の余裕がある）。
   //
   // EXHAUSTIVE_POOL_CAP は探索で集める解の上限、EXHAUSTIVE_MAX_SOLUTIONS は
   // 画面の候補として表示する上限。poolCap = maxSolutions + 1 にしておくことで、
   // 「表示しきってもなお解が残っている」状態をalgorithm.js側のhitPoolCapで
-  // 正確に判定でき、メッセージの「99通り以上」を厳密に出せる（ver4.17）。
-  // ver4.16まではpoolCapを渡しておらずalgorithm.js側の既定値60に暗黙依存していたため、
+  // 正確に判定でき、メッセージの「99通り以上」を厳密に出せる（ver0.4.17）。
+  // ver0.4.16まではpoolCapを渡しておらずalgorithm.js側の既定値60に暗黙依存していたため、
   // ui.js側は自分が何件で打ち切られているかを知らなかった。
   const EXHAUSTIVE_MAX_SOLUTIONS = 99;
   const EXHAUSTIVE_POOL_CAP = EXHAUSTIVE_MAX_SOLUTIONS + 1;
@@ -83,7 +83,11 @@
     // ojt.csvのパース結果とインデックス（教官・OJTのバッジ再計算・違反チェックに使用。
     // secret.csvと同様、保存ファイルには含めず、読み込み時にojt.csvから作り直す）
     ojtRows: null, ojtIndexes: null,
-    // 全探索backtrackの結果（ver4.8で追加）。「自動配置を実行」のたびに作り直す。
+    // rookie.csvのパース結果とインデックス（新人バッジの再計算に使用。〈ver0.4.19で追加〉
+    // ojt.csvと同じ扱いで、rookie.csvが読み込まれていればそちらを優先し、
+    // 未読み込みなら保存データが持つ新人バッジをそのまま維持する）
+    rookieRows: null, rookieIndexes: null,
+    // 全探索backtrackの結果（ver0.4.8で追加）。「自動配置を実行」のたびに作り直す。
     // { feasible, timedOut, totalSolutionsFound, solutions:[...], bestPartial, context, index }
     // 保存データの読み込み時や、隣接禁止対象者が0名などで解が1件しかない場合はnull。
     dayExhaustive: null, nightExhaustive: null,
@@ -180,6 +184,8 @@
       if (key === 'secret' && hasRunOnce) refreshRuleIndexesFromSecret();
       // ojt.csvも同様に、既に配置が存在する場合はその場でバッジ表示を再構築する
       if (key === 'ojt' && hasRunOnce) refreshOjtIndexesFromOjt();
+      // rookie.csvも同様（ver0.4.19）
+      if (key === 'rookie' && hasRunOnce) refreshRookieIndexesFromRookie();
     } catch (e) {
       markFileFailed(key);
       if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
@@ -223,6 +229,21 @@
     ]);
     scrollToMessages();
   }
+  // rookie.csvも同様（ver0.4.19）。読み込んだ時点で新人バッジを付け直す。
+  // ※座席そのものの再配置は行わない（既存の配置を崩さないため）。
+  function refreshRookieIndexesFromRookie() {
+    const rookieParsed = parseRookieRows(rawText.rookie);
+    appState.rookieRows = rookieParsed.rows;
+    appState.rookieIndexes = buildRookieIndexes(rookieParsed.rows);
+    reapplyBadges();
+    render();
+    renderMessages([
+      ...rookieParsed.logs,
+      { level: 'info', message: 'rookie.csvを読み込み、新人のバッジ表示を更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
+    ]);
+    scrollToMessages();
+  }
+
 
   // 月間シフトCSVを読み込み直すたびに呼び、日付セレクタを更新する
   function refreshShiftMonthly() {
@@ -374,7 +395,7 @@
     dayRows.forEach(r => {
       const base = {
         name: r.name, start: r.start, end: r.end, startMin: r.startMin, endMin: r.endMin,
-        // 同日2回勤務を区別する識別子（csv.jsが付与）。〈ver4.18〉
+        // 同日2回勤務を区別する識別子（csv.jsが付与）。〈ver0.4.18〉
         pkey: r.pkey || `${r.name}|${r.start}`,
         frontOT: r.frontOT, backOT: r.backOT,
       };
@@ -413,7 +434,7 @@
         });
       }
       const best = exhaustiveResult.solutions[0];
-      // 探索がどう終わったかを、実際の結果に即して3通りに出し分ける（ver4.17）。
+      // 探索がどう終わったかを、実際の結果に即して3通りに出し分ける（ver0.4.17）。
       //   1) hitPoolCap: 表示上限（EXHAUSTIVE_MAX_SOLUTIONS件）を超えて解が見つかった
       //      → 正確な総数は分からないため「○通り以上」
       //   2) timedOut:   制限時間で探索を打ち切った → 「○通り見つけたところで制限時間」
@@ -515,7 +536,7 @@
     // --- 日勤 ---
     // 教官・OJT（新人固定席の次・固定席より前の優先順位）は assignSeats / assignSeatsWithEscalation 内で処理する。
     // 隣接禁止対象者の配置は、まず全探索backtrackで解けるかどうかを試す。
-    // ver4.11から、通常の優先順位（段階0）で解けない場合は隣接禁止の優先順位を
+    // ver0.4.11から、通常の優先順位（段階0）で解けない場合は隣接禁止の優先順位を
     // 1段階ずつ繰り上げて再探索する（教官・OJTの直後＝段階2まで。優先フラグ・
     // 新人固定席・教官・OJTは常に先のまま）。いずれかの段階で解けた場合はその最良解（スコア最上位）を
     // 採用し、どの段階でも解けなかった場合のみ、従来の貪欲+MRV（assignSeats）に
@@ -526,7 +547,7 @@
     });
     const seatResult = buildSeatResultFromExhaustive(
       dayExhaustiveResult, '日勤',
-      // どの段階でも解けなかった場合の最終フォールバック。ver4.13から、
+      // どの段階でも解けなかった場合の最終フォールバック。ver0.4.13から、
       // 最終段階（教官・OJTの直後に隣接禁止）の優先順位で貪欲配置する
       // （繰り上げの最終段階を尊重するため。ADJACENT_ESCALATION_MAX_LEVEL参照）
       () => assignSeats(opRows, rookieParsed.rows, secretParsed.rows,
@@ -560,7 +581,7 @@
     //    夜勤は教官・OJTの役席・GL振り替え（splitDayRows側の分岐）は行わないが、
     //    OP同士の教官・OJTペア自体はここでも同じロジックが動く（実害はない前提）。
     //    隣接禁止対象者の配置は日勤と同様、まず全探索backtrackを試し、
-    //    解けない場合は隣接禁止の優先順位を繰り上げて再探索する（ver4.11）。
+    //    解けない場合は隣接禁止の優先順位を繰り上げて再探索する（ver0.4.11）。
     const nightExhaustiveOptions = {
       nightContext: true, ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS,
       poolCap: EXHAUSTIVE_POOL_CAP, timeBudgetMs: EXHAUSTIVE_TIME_BUDGET_MS,
@@ -599,6 +620,8 @@
     appState.secretRows = secretParsed.rows;
     appState.ojtRows = ojtParsed.rows;
     appState.ojtIndexes = ojtIndexes;
+    appState.rookieRows = rookieParsed.rows;
+    appState.rookieIndexes = buildRookieIndexes(rookieParsed.rows);
     appState.currentDateLabel = formatDateLabel(selectedDate);
     appState.currentDate = selectedDate;
     hasRunOnce = true;
@@ -638,8 +661,9 @@
       return {
         hasAdjacentRule: false, hasForbiddenSeatRule: false, isDesignated: false,
         designatedSeatNumbers: [], forbiddenSeatNumbers: [], adjacentGroupLetter: null,
-        isSupport: false, supportSeatNumbers: [],
+        isSupport: false, supportSeatNumbers: [], hasPriorityFlag: false,
         ...deriveOjtBadgeFields(name, existing),
+        ...deriveRookieBadgeFields(name, existing),
       };
     }
     const letters = appState.adjacentGroupLetters;
@@ -652,7 +676,9 @@
       adjacentGroupLetter: (letters && letters.get(name)) || null,
       isSupport: idx.supportNames.has(name),
       supportSeatNumbers: (idx.supportSeatsMap.get(name) || []).map(numberOfKey),
+      hasPriorityFlag: idx.priorityFlagMap.has(name),
       ...deriveOjtBadgeFields(name, existing),
+      ...deriveRookieBadgeFields(name, existing),
     };
   }
 
@@ -660,10 +686,39 @@
   // ojt.csvが読み込まれている場合は、常にそこから最新の状態を計算する
   // （氏名を手入力で変更した場合の再判定や、ojt.csv再読み込み時の更新はこちら）。
   // ojt.csvが未読み込みの場合、existing（変更前の人物オブジェクト）が渡されていれば
-  // その教官・OJTバッジ情報をそのまま維持する（ver4.14。保存データの読み込み時に、
+  // その教官・OJTバッジ情報をそのまま維持する（ver0.4.14。保存データの読み込み時に、
   // 保存ファイル自身が持つ教官・OJT情報を消してしまわないようにするため。新人固定席の
   // isRookie/rookieRankと同様の扱い）。existingが渡されていない場合（氏名を手入力で
   // 変更した直後など）はfalse/nullにする。
+  // rookie.csv（新人固定席）由来のバッジ情報。〈ver0.4.19で追加〉
+  // 教官・OJT（deriveOjtBadgeFields）と考え方をそろえてある:
+  //   ・rookie.csvが読み込まれていれば、常にそこから最新の状態を計算する
+  //   ・未読み込みなら existing（変更前の人物オブジェクト）の新人バッジを維持する
+  //   ・existingも無ければバッジなしにする
+  // ただし rookieRank（新人1〜7の順位）は rookie.csv だけでは決まらず、
+  // 「その日配置されている人の中で新人度合いが小さい順」で決まる。そのため
+  // 順位はこの関数では確定させず、reapplyRookieRanks() が配置済みの全カードを
+  // 見てから付け直す（この関数は isRookie の判定と度合いの保持までを行う）。
+  function deriveRookieBadgeFields(name, existing) {
+    const idx = appState.rookieIndexes;
+    if (idx) {
+      const has = idx.degreeOf.has(name);
+      return {
+        isRookie: has,
+        rookieDegree: has ? idx.degreeOf.get(name) : null,
+        rookieRank: has && existing && Number.isFinite(existing.rookieRank) ? existing.rookieRank : null,
+      };
+    }
+    if (existing) {
+      return {
+        isRookie: !!existing.isRookie,
+        rookieDegree: Number.isFinite(existing.rookieDegree) ? existing.rookieDegree : null,
+        rookieRank: Number.isFinite(existing.rookieRank) ? existing.rookieRank : null,
+      };
+    }
+    return { isRookie: false, rookieDegree: null, rookieRank: null };
+  }
+
   function deriveOjtBadgeFields(name, existing) {
     const idx = appState.ojtIndexes;
     if (idx) {
@@ -686,7 +741,7 @@
   }
 
   // 指定した位置以外に、同じ氏名の人がすでにいないか確認する（手入力での重複防止）。
-  // 二重配置の廃止（ver4.0）に伴い、夜勤GL枠・予備枠も含めた全エリアでチェックする。
+  // 二重配置の廃止（ver0.4.0）に伴い、夜勤GL枠・予備枠も含めた全エリアでチェックする。
   function isNameUsedElsewhere(name, loc) {
     for (const [seatType, seatState] of [['seat', appState.seats], ['nightSeat', appState.nightSeats]]) {
       for (const s of SEATS) {
@@ -813,6 +868,9 @@
 
     const badges = document.createElement('div');
     badges.className = 'badges';
+    if (person.hasPriorityFlag) {
+      badges.appendChild(makeBadge('priority', '優先'));
+    }
     if (person.isRookie) {
       badges.appendChild(makeBadge('rookie', person.rookieRank ? `新人${person.rookieRank}` : '新人'));
     }
@@ -969,7 +1027,7 @@
       const updated = {
         ...person,
         name: newName, start: newStart, end: newEnd, startMin, endMin,
-        // 氏名・開始時刻が変わりうるため、識別子も作り直す。〈ver4.18〉
+        // 氏名・開始時刻が変わりうるため、識別子も作り直す。〈ver0.4.18〉
         pkey: `${newName}|${newStart}`,
         ...deriveBadgeFields(newName),
       };
@@ -1021,7 +1079,7 @@
   }
 
   // ドラッグ元とドロップ先の中身を入れ替える（人単位の移動・交換）。
-  // ver4.0で二重配置を廃止したため、夜勤GL枠・予備枠も含め全エリア間で自由に移動できる。
+  // ver0.4.0で二重配置を廃止したため、夜勤GL枠・予備枠も含め全エリア間で自由に移動できる。
   function handleDrop(target) {
     if (!dragSource) return;
     editingLoc = null; // ドラッグ操作が起きたら、開いていた編集フォームは閉じる
@@ -1177,14 +1235,14 @@
     renderCandidatePanel('night', appState.nightExhaustive);
   }
 
-  // ---------- 全探索backtrack：候補パネル（ver4.8で追加） ----------
+  // ---------- 全探索backtrack：候補パネル（ver0.4.8で追加） ----------
 
   // 座席表(state)から「氏名 -> 座席key」のMapを作る（差分検出用）
   function collectSeatAssignments(state) {
     const map = new Map();
     for (const s of SEATS) {
       // 同日2回勤務の人は同じ氏名で2席に座るため、氏名だけでは差分が正しく取れない。
-      // 氏名＋開始時刻（pkey相当）をキーにする。〈ver4.18〉
+      // 氏名＋開始時刻（pkey相当）をキーにする。〈ver0.4.18〉
       state[s.key].forEach(p => { if (p) map.set(p.pkey || `${p.name}|${p.start}`, s.key); });
     }
     return map;
@@ -1214,7 +1272,7 @@
   // 座席が変わった人は、候補欄の下に氏名を列挙するのではなく、座席カード自体を
   // 一瞬光らせて知らせる（changedNamesの利用先はrenderSeatGrid/renderOverflow側の
   // ハイライトのみ）。
-  // 候補の「同格グループ」を判定する（ver4.17）。
+  // 候補の「同格グループ」を判定する（ver0.4.17）。
   // solutions は algorithm.js 側で ①preferredMiss（指定席を守れなかった人数）→
   // ②boundaryMatches（交代時刻がぴったり重なる同席の数）→ ③variance（席の偏り）
   // の順に良い順で並んでいる。①②は同点が出やすい離散的な指標なので、
@@ -1271,7 +1329,7 @@
     const els2 = candidateEls[prefix];
     if (!els2 || !els2.btnNext || !els2.btnShuffle) return;
 
-    // 「次案を表示」ボタン（ver4.17。①隣接禁止対象者側の案を次の候補に進め、
+    // 「次案を表示」ボタン（ver0.4.17。①隣接禁止対象者側の案を次の候補に進め、
     // ②続けてその新しい案の上で禁止席のみの対象者とその他スタッフをランダムに
     // 配置し直す、をセットで行う。候補が1件しかない場合はrenderCandidatePanelで
     // 無効化されるため、ここに来る時点で必ず2件以上ある）。
@@ -1294,7 +1352,7 @@
       applyCandidate(ex, (ex.index + 1) % ex.solutions.length);
     });
 
-    // 「候補1に戻す」ボタン（ver4.17で追加）: 候補は良い順に並んでおり逆送りが
+    // 「候補1に戻す」ボタン（ver0.4.17で追加）: 候補は良い順に並んでおり逆送りが
     // できないため、行き過ぎたときに1クリックで先頭（最良の案）へ戻れるようにする。
     if (els2.btnBest) {
       els2.btnBest.addEventListener('click', () => {
@@ -1304,7 +1362,7 @@
       });
     }
 
-    // 「一部シャッフル」ボタン（旧「シャッフル」。ver4.17で改称）: 隣接禁止対象者・
+    // 「一部シャッフル」ボタン（旧「シャッフル」。ver0.4.17で改称）: 隣接禁止対象者・
     // 固定席・要サポート・教官OJT・新人固定席側の座席は変えず、禁止席のみの
     // 対象者とその他スタッフだけをランダムに配置し直す。
     els2.btnShuffle.addEventListener('click', () => {
@@ -1504,7 +1562,7 @@
   }
   document.getElementById('btn-check').addEventListener('click', checkPlacementViolations);
 
-  // ---------- 配置の保存・読み込み（ver4.3で追加 / ver4.6でダウンロード方式に変更） ----------
+  // ---------- 配置の保存・読み込み（ver0.4.3で追加 / ver0.4.6でダウンロード方式に変更） ----------
   // 「現在の配置を保存」: いま画面に表示されている配置（手動調整・✎編集の内容を含む）
   // をJSONファイルとしてダウンロードする（保存先はブラウザの既定のダウンロード
   // フォルダになる。ブラウザ側で毎回保存先を確認する設定の場合はそちらが優先される）。
@@ -1531,7 +1589,7 @@
   // adjacentGroupLetter / hasNightGLDesignation）は、保存ファイルから固定席・
   // 禁止席などの内容を推測できてしまうため、ここで確実に落とす。
   // isRookie/rookieRank（新人固定席）と、isOjtMentor/isOjtTrainee/ojtMentorName/
-  // ojtTraineeNames（教官・OJT。ver4.14で追加）は例外として保存する。
+  // ojtTraineeNames（教官・OJT。ver0.4.14で追加）は例外として保存する。
   // これらはsecret.csvの禁止席・隣接禁止のような「配置の制約」を推測させる
   // 情報ではなく、rookie.csv/ojt.csvが読み込まれていない環境で保存データを
   // 開いた場合にもバッジ表示が失われないようにするための情報のため。
@@ -1539,13 +1597,15 @@
     if (!p) return null;
     return {
       name: p.name, start: p.start, end: p.end,
-      // 同日2回勤務の識別子。〈ver4.18で追加。古い保存ファイルには無いが、
+      // 同日2回勤務の識別子。〈ver0.4.18で追加。古い保存ファイルには無いが、
       // 復元時にsanitizePersonが氏名＋開始時刻から補完する〉
       pkey: typeof p.pkey === 'string' && p.pkey ? p.pkey : `${p.name}|${p.start}`,
       frontOT: !!p.frontOT, backOT: !!p.backOT,
       role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
       isRookie: !!p.isRookie,
       rookieRank: Number.isFinite(p.rookieRank) ? p.rookieRank : null,
+      // 新人度合い〈ver0.4.19で追加〉。読み込み後に順位を付け直すために保存する
+      rookieDegree: Number.isFinite(p.rookieDegree) ? p.rookieDegree : null,
       isOjtMentor: !!p.isOjtMentor,
       isOjtTrainee: !!p.isOjtTrainee,
       ojtMentorName: typeof p.ojtMentorName === 'string' ? p.ojtMentorName : null,
@@ -1654,7 +1714,7 @@
   // 保存ファイルに余計な項目が入っていてもここで確実に落とす（secret.csv由来の
   // バッジ情報は後段の reapplyBadges でsecret.csvから再計算する。
   // isRookie/rookieRankと、isOjtMentor/isOjtTrainee/ojtMentorName/ojtTraineeNames
-  // 〈ver4.14で追加〉は保存データにそのまま含まれているため、ここでそのまま
+  // 〈ver0.4.14で追加〉は保存データにそのまま含まれているため、ここでそのまま
   // 取り込む。ojt.csvが読み込まれていればreapplyBadgesで最新の内容に更新され、
   // 読み込まれていなければこの保存データの内容がそのまま使われる）。
   // 壊れているエントリはnull（空席扱い）にして読み飛ばし、氏名が分かるものは
@@ -1673,7 +1733,7 @@
     }
     return {
       name, start, end, startMin, endMin,
-      // 同日2回勤務を区別する識別子。〈ver4.18で追加〉
+      // 同日2回勤務を区別する識別子。〈ver0.4.18で追加〉
       // 既存の保存ファイルにはpkeyが無いため、氏名＋開始時刻から補完する
       // （csv.js側と同じ組み立て方のため、同じ値になる）。
       pkey: typeof p.pkey === 'string' && p.pkey ? p.pkey : `${name}|${start}`,
@@ -1681,6 +1741,8 @@
       role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
       isRookie: !!p.isRookie,
       rookieRank: Number.isFinite(p.rookieRank) ? p.rookieRank : null,
+      // 新人度合い〈ver0.4.19で追加〉。読み込み後に順位を付け直すために保存する
+      rookieDegree: Number.isFinite(p.rookieDegree) ? p.rookieDegree : null,
       isOjtMentor: !!p.isOjtMentor,
       isOjtTrainee: !!p.isOjtTrainee,
       ojtMentorName: typeof p.ojtMentorName === 'string' ? p.ojtMentorName : null,
@@ -1744,6 +1806,41 @@
     }
     appState.overflow = appState.overflow.map(p => apply(p, false));
     appState.nightOverflow = appState.nightOverflow.map(p => apply(p, true));
+    reapplyRookieRanks();
+  }
+
+  // 新人バッジの順位（新人1〜7）を、いま配置されている人を対象に付け直す。
+  // 〈ver0.4.19で追加〉rookie.csvが未読み込みのときは、保存データが持っている
+  // 順位をそのまま使う（何もしない）。
+  // 順位の決め方は algorithm.js の「新人（固定席）の対象者・順位の決定」と同じ:
+  //   新人度合いが小さいほど新人として優先。同数値のときは後から出てくる人をより新人とする
+  //   （自動配置時は月間シフトCSVの行順で判定するが、保存データにはその行順が
+  //   残っていないため、ここでは日勤→夜勤・座席番号順の並びで代用する）。
+  // 日勤・夜勤はそれぞれ別に順位を振る（自動配置時も別々に計算されるため）。
+  function reapplyRookieRanks() {
+    const idx = appState.rookieIndexes;
+    if (!idx) return;
+    const rankSide = (seatState, overflowList) => {
+      const found = [];
+      SEATS.forEach(s => {
+        for (let i = 0; i < 2; i++) {
+          const p = seatState[s.key][i];
+          if (p && p.isRookie) found.push({ p, order: found.length });
+        }
+      });
+      overflowList.forEach(p => { if (p && p.isRookie) found.push({ p, order: found.length }); });
+      found.sort((a, b) => {
+        const da = Number.isFinite(a.p.rookieDegree) ? a.p.rookieDegree : Infinity;
+        const db = Number.isFinite(b.p.rookieDegree) ? b.p.rookieDegree : Infinity;
+        if (da !== db) return da - db;
+        return b.order - a.order;
+      });
+      found.forEach((entry, i) => {
+        entry.p.rookieRank = i < idx.rookieSeatCount ? i + 1 : null;
+      });
+    };
+    rankSide(appState.seats, appState.overflow);
+    rankSide(appState.nightSeats, appState.nightOverflow);
   }
 
   // 保存ファイルのテキストを検証してオブジェクトにする。問題があればerrorを返す
@@ -1803,6 +1900,18 @@
       appState.ojtRows = null;
       appState.ojtIndexes = null;
     }
+    // rookie.csv由来の新人バッジも同じ扱い（ver0.4.19）。読み込まれていればそちらを
+    // 正として付け直し、未読み込みなら保存ファイルが持っている内容を維持する。
+    let rookieNote = null;
+    if (rawText.rookie) {
+      const rookieParsed = parseRookieRows(rawText.rookie);
+      appState.rookieRows = rookieParsed.rows;
+      appState.rookieIndexes = buildRookieIndexes(rookieParsed.rows);
+      rookieNote = { level: 'info', message: '読み込み済みのrookie.csvから、新人のバッジ表示を構築しました。' };
+    } else {
+      appState.rookieRows = null;
+      appState.rookieIndexes = null;
+    }
     reapplyBadges();
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
     appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
@@ -1819,6 +1928,7 @@
       message: `保存した配置を読み込みました（対象日: ${appState.currentDateLabel || '不明'} ／ 保存日時: ${typeof data.savedAt === 'string' ? data.savedAt : '不明'}）。`,
     }, secretNote];
     if (ojtNote) logs.push(ojtNote);
+    if (rookieNote) logs.push(rookieNote);
     if (brokenNames.length > 0) {
       logs.push({
         level: 'warn',

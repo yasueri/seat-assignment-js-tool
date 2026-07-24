@@ -18,6 +18,8 @@
     --mentor-bg:#F1EAFB;
     --support:#0E7C86;
     --support-bg:#E3F4F5;
+    --priority:#C2410C;
+    --priority-bg:#FDEBE0;
     --empty-border:#C7CEDA;
     --ot-bg:#FFF3B0;
     --ot-mark:#8A6D00;
@@ -242,6 +244,17 @@
     font-size:16px;
     margin-bottom:8px;
     padding:4px 0;
+    /* summary は既定でブロック幅いっぱいに広がるため、文字の無い右側の余白を
+       クリックしてもトグルが開いてしまう。文字幅（＋▶マーカー）に合わせて縮め、
+       クリック範囲を文字列だけに限定する。
+       max-width は、ウィンドウが狭く文字が折り返す場合にパネルからはみ出さない
+       ための保険。
+       注意: 将来 summary に背景色や枠線を付ける場合、この指定だと見た目も一緒に
+       縮む。横いっぱいに見せたいときは、見た目用の要素とクリック範囲を分けること。
+       この指定は details.help 配下の入れ子 summary（723〜725行目）にも効くため、
+       トグルの挙動はすべて揃う。 */
+    width:fit-content;
+    max-width:100%;
   }
   details.help[open] summary{
     margin-bottom:0;
@@ -530,6 +543,7 @@
   .badge.adjacent{ background:var(--adjacent-bg); color:var(--adjacent); }
   .badge.mentor{ background:var(--mentor-bg); color:var(--mentor); }
   .badge.support{ background:var(--support-bg); color:var(--support); }
+  .badge.priority{ background:var(--priority-bg); color:var(--priority); }
 
   .edit-toggle{
     flex-shrink:0;
@@ -651,7 +665,7 @@
     font-size:14px;
     color:#C79A94;
   }
-  /* 全探索backtrack：候補パネル（「次案を表示」「候補1に戻す」「一部シャッフル」ボタン。ver4.8で追加） */
+  /* 全探索backtrack：候補パネル（「次案を表示」「候補1に戻す」「一部シャッフル」ボタン。ver0.4.8で追加） */
   .candidate-panel{
     width:190px;
     flex:none;
@@ -673,7 +687,7 @@
     color:var(--text-muted);
     font-family:var(--font-mono);
   }
-  /* 候補欄の下に出す「同格グループ」ラベル（ver4.17）。先頭の案と同格なら
+  /* 候補欄の下に出す「同格グループ」ラベル（ver0.4.17）。先頭の案と同格なら
      通常色、①指定席・②同時刻入替の点で劣る案では注意色にして気づけるようにする */
   .candidate-note{
     font-size:12px;
@@ -695,7 +709,7 @@
     padding:7px 8px;
     gap:1px;
   }
-  /* 候補ボタンの2行目（補足行）用。ver4.17で候補ボタンを全て1行に統一したため
+  /* 候補ボタンの2行目（補足行）用。ver0.4.17で候補ボタンを全て1行に統一したため
      現在は未使用だが、補足行を復活させる場合に備えて残している */
   .candidate-btn-sub{
     font-weight:400;

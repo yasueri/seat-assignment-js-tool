@@ -3,15 +3,15 @@
 // 座席の定義と、優先フラグ → 新人固定席 → 教官・OJT → 固定席 → 要サポート →
 // 隣接禁止 → 禁止席のみの対象者 → その他スタッフ の順で座席を割り当てる
 // アルゴリズムを担当する。隣接禁止対象者の全探索backtrack（全パターン検索。
-// 旧algorithmExhaustive.js。ver4.9でこのファイルに統合）と、隣接禁止の条件を
+// 旧algorithmExhaustive.js。ver0.4.9でこのファイルに統合）と、隣接禁止の条件を
 // 満たせない場合に隣接禁止の優先順位を1段階ずつ繰り上げて再探索する仕組み
-// （ver4.11で追加。ADJACENT_ESCALATION_MAX_LEVEL・assignSeatsWithEscalation参照）、
+// （ver0.4.11で追加。ADJACENT_ESCALATION_MAX_LEVEL・assignSeatsWithEscalation参照）、
 // および禁止席のみの対象者も全探索backtrackで最適配置する仕組み
-// （ver4.12で追加。findFeasibleAssignment参照。全探索側でのみ有効。
+// （ver0.4.12で追加。findFeasibleAssignment参照。全探索側でのみ有効。
 // 貪欲+MRV assignSeatsのフォールバック時は従来どおり貪欲のまま）も含む。
 // CSVの形式やDOMには一切依存しない（テストしやすくするため）。
 // 同日2回勤務（1人が同じ日に重ならない別々の時間帯で出勤する応援勤務）に対応
-// （ver4.18で追加）。人物の同一性は氏名ではなく pkey（氏名|開始時刻）で判定する。
+// （ver0.4.18で追加）。人物の同一性は氏名ではなく pkey（氏名|開始時刻）で判定する。
 // 座席側の識別子 seat.key と紛らわしくならないよう、人物側は pkey という名前にしてある。
 // ただし ojt.csv / rookie.csv / secret.csv は氏名で人を指すため、それらの照合には
 // 引き続き byName（氏名 -> 人）を使う。座席の配置・復元には byKey（pkey -> 人）を使う。
@@ -83,8 +83,8 @@ window.SeatTool.algorithm = (function () {
   function numberOfKey(key) { return NUMBER_BY_KEY[key] || null; }
   function numberOfSeat(row, col) { return numberOfKey(`${row}-${col}`); }
 
-  // 隣接禁止（ルール1）の「隣接」の定義。ver4.16から全方向（上下左右＋斜め）を
-  // 隣接とみなす（ver4.15までは同列の上下のみだった）。
+  // 隣接禁止（ルール1）の「隣接」の定義。ver0.4.16から全方向（上下左右＋斜め）を
+  // 隣接とみなす（ver0.4.15までは同列の上下のみだった）。
   //   例: 座席1（1行1列）の隣接席 → 2・5・6
   //       座席6（2行2列）の隣接席 → 1・2・3・5・7・9・10・11
   function isAdjacentSeat(a, b) {
@@ -236,7 +236,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   // ============================================================
-  // 教官・OJT（ojt.csv、ver4.7で追加）
+  // 教官・OJT（ojt.csv、ver0.4.7で追加）
   // ・優先順位は新人固定席・固定席の次（新人→固定席→教官・OJTの順）
   // ・教官1名につきOJT対象者は最大2名。教官とOJT一人目は同じ座席に同席する
   //   （この場合に限り、勤務時間が重なっていても同席を許可する＝通常「1座席2名
@@ -246,25 +246,28 @@ window.SeatTool.algorithm = (function () {
   // ・教官が本日不在の場合、OJT対象者は同席する相手がいないためお1人で配置する
   //   （対象座席の優先順のみ流用。手動での臨時教官の割り当てが必要な旨をログに残す）
   // ・複数の教官がいる場合、教官1名・OJT2名（ペア配置）のケースを先に配置する。
-  //   教官1名・OJT1名側は、既定順（15→12→8→4→3→2→1→他）で探す（ver4.16）。
+  //   教官1名・OJT1名側は、既定順（15→12→8→4→3→2→1→他）で探す（ver0.4.16）。
   // ・出勤している教官が2名でOJT対象者が合計2名のとき、ojt.csv上は片方の教官が
   //   2名とも担当し、もう片方が0名という内訳であれば、教官1名・OJT1名ずつの
-  //   組み合わせに自動的に組み替える（ver4.16）。
+  //   組み合わせに自動的に組み替える（ver0.4.16）。
   // ============================================================
 
-  // ---------- 新人（rookie.csv）の既定座席順（ver4.16で変更） ----------
-  // 新人1人目→5番、2人目→10番、3人目→6番 … の順に固定席として配置する。
+  // ---------- 新人（rookie.csv）の既定座席順（ver0.4.16で変更） ----------
+  // 新人はこの並びの先頭から順に空きを探して固定席として配置する。
+  // 通常は 新人1人目→5番、2人目→10番、3人目→6番 … となるが、優先フラグなど
+  // より優先度の高いステップで先に埋まっている座席は飛ばして次の候補へ繰り下げる
+  // 〈ver0.5.1で変更。それ以前は「新人N人目は配列のN番目の席のみ」を試していた〉。
   // この並びより人数が多い場合（8人目以降）は固定席を使わず通常の空席探索で配置する。
   const ROOKIE_DEFAULT_SEAT_ORDER = [5, 10, 6, 11, 7, 12, 8];
 
-  // 単独配置（教官+OJT一人目）の既定候補順（ver4.16で 15→12→8→4 から拡張）。
+  // 単独配置（教官+OJT一人目）の既定候補順（ver0.4.16で 15→12→8→4 から拡張）。
   // ojt.csvの対象座席で指定した座席がこれより前に来る
   // （例:「12」なら 12,15,8,4,3,2,1 の順になる）。
   // ここに無い座席は「他」として通常の空席探索で配置する。
   const OJT_DEFAULT_SINGLE_ORDER = [15, 12, 8, 4, 3, 2, 1];
 
   // OJT二人目がいる場合のペア候補（[教官＋OJT一人目が座る側, OJT二人目が座る側]）。
-  // ver4.16で並びを全面的に変更した。
+  // ver0.4.16で並びを全面的に変更した。
   //   主要候補: 12,8 → 12,15 → 15,14 → 4,3 → 3,2 → 2,1
   //   （ojt.csvの対象座席で15を12より先に明示指定した教官のみ、15,14 を先に試す）
   //   その他の隣接席（本来はここまで来ないことを想定した最終候補）:
@@ -279,6 +282,16 @@ window.SeatTool.algorithm = (function () {
   ];
 
   // ojt.csvの行から、判定・配置に使うインデックスを組み立てる
+  // rookie.csv の行から、氏名 -> 新人度合い の索引を作る。〈ver0.4.19で追加〉
+  // 保存データ読み込み後にバッジを付け直すために使う（buildOjtIndexes と同じ役割）。
+  function buildRookieIndexes(rookieRows) {
+    const degreeOf = new Map();
+    (rookieRows || []).forEach(r => {
+      if (r && typeof r.name === 'string' && !degreeOf.has(r.name)) degreeOf.set(r.name, r.degree);
+    });
+    return { degreeOf, rookieSeatCount: ROOKIE_DEFAULT_SEAT_ORDER.length };
+  }
+
   function buildOjtIndexes(ojtRows) {
     const mentorOf = new Map();     // OJT対象者名 -> 教官名
     const traineesOf = new Map();   // 教官名 -> [OJT対象者名, ...]（ojt.csv記載順）
@@ -427,7 +440,7 @@ window.SeatTool.algorithm = (function () {
       // 教官自身が既に他の優先ルール（固定席）で配置済みの場合は、教官・OJTの
       // 特別な同席処理には使えないため、不在の教官と同様に扱う
       // placedNamesはpkey（氏名|開始時刻）で持つため、氏名から人を引いてから判定する。
-      // 〈ver4.18。教官・OJT対象者は同日2回勤務の対象外という前提〉
+      // 〈ver0.4.18。教官・OJT対象者は同日2回勤務の対象外という前提〉
       const available = !!mentor && !placedNames.has(mentor.pkey);
       const ownTrainees = (ojtIndexes.traineesOf.get(mentorName) || []).filter(t => {
         const person = byName.get(t);
@@ -472,7 +485,7 @@ window.SeatTool.algorithm = (function () {
       logs.push({ level: 'warn', message: `${orphanGroup.ownTrainees.join('さん、')}さんの担当教官（${orphanGroup.mentorName}さん）が本日不在で、代わりに担当できる教官も見つからなかったため、OJT対象者のみで配置しました。手動で臨時教官を割り当ててください。` });
     });
 
-    // ---- 2.5th pass: 教官2名・OJT2名のときの組み替え（ver4.16で追加） ----
+    // ---- 2.5th pass: 教官2名・OJT2名のときの組み替え（ver0.4.16で追加） ----
     // 出勤している教官が2名・OJT対象者が合計2名で、その内訳が「教官1名がOJT2名を
     // 担当・もう1名は担当なし」だった場合、教官1名・OJT1名ずつの組み合わせに
     // 組み替える（どちらのOJT対象者を移すかは指定がないため、2人目を移す）。
@@ -510,9 +523,9 @@ window.SeatTool.algorithm = (function () {
 
       if (traineeNames.length === 1) {
         const trainee = byName.get(traineeNames[0]);
-        // 既定順（15→12→8→4→3→2→1→他）で探す。ver4.15までは、既に配置済みの
+        // 既定順（15→12→8→4→3→2→1→他）で探す。ver0.4.15までは、既に配置済みの
         // 教官1名・OJT2名の座席の同列1つ前を追加候補として試していたが、
-        // ver4.16で既定順そのものを1番まで伸ばしたため、この追加候補は廃止した。
+        // ver0.4.16で既定順そのものを1番まで伸ばしたため、この追加候補は廃止した。
         const seat = findSharedSeatInOrder(singleOrder, mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet, true)
           || findSharedSeatAnywhere(mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet);
         if (seat) {
@@ -571,7 +584,7 @@ window.SeatTool.algorithm = (function () {
   // 現時点のstateで、この人が置ける座席の数を数える（「最も制約がきつい人」を
   // 判定するためのMRV=Minimum Remaining Valuesの指標として使う。値が小さいほど厳しい）。
   // canPlace/ADJACENCYをそのまま使って判定するため、隣接の定義（isAdjacentSeat）が
-  // 変わっても、この関数は無修正で追従する（実際、ver4.16で同列上下から全方向へ
+  // 変わっても、この関数は無修正で追従する（実際、ver0.4.16で同列上下から全方向へ
   // 変更した際もこの関数は無修正だった）。
   function countValidSeats(person, state, forbiddenSeatSet, forbiddenPairSet) {
     let n = 0;
@@ -582,7 +595,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   // ============================================================
-  // 事前の矛盾検知（ver4.7で追加）
+  // 事前の矛盾検知（ver0.4.7で追加）
   // 実際に配置を試みて失敗するのを待つのではなく、secret.csvの記載内容だけから
   // 「他の誰の配置状況にも関係なく、どう頑張っても配置不可能」と静的に判定できる
   // ケースを先に洗い出し、原因をピンポイントで示す。
@@ -658,7 +671,7 @@ window.SeatTool.algorithm = (function () {
   // avoidAdjacency=true（夜勤専用）の場合、同列で隣接する座席に既に誰かいる候補は
   // 他に選べる候補がある限り避ける（ソフトな優先度。境界時刻一致の回避と同様の扱い）。
   // secret.csvの固定席などにより結果的に隣接してしまうのは許容する（エラーにしない）。
-  // deterministic=true（ver4.8で追加。全探索の「その他」決定的配置、および
+  // deterministic=true（ver0.4.8で追加。全探索の「その他」決定的配置、および
   // 「次案を表示」での切り替え時の表示安定化に使用）の場合はshuffleせず、渡された順序
   // （＝座席番号順）のまま先頭から探す。省略時はfalse（従来どおりランダム）。
   function findSeatAmongCandidates(candidateSeats, person, state, forbiddenSeatSet, forbiddenPairSet, avoidAdjacency, deterministic) {
@@ -713,7 +726,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   // ============================================================
-  // 隣接禁止の繰り上げ段階（ver4.11で追加。ver4.16で優先順位と上限を変更）
+  // 隣接禁止の繰り上げ段階（ver0.4.11で追加。ver0.4.16で優先順位と上限を変更）
   // 隣接禁止対象者を配置するタイミング（隣接禁止ステップ）を、失敗するたびに
   // 1段階ずつ前へ繰り上げて再探索するための定義。優先フラグ・新人固定席・
   // 教官・OJTより前には繰り上げない（上限は段階2＝教官・OJTの直後）。
@@ -721,9 +734,9 @@ window.SeatTool.algorithm = (function () {
   //   段階1:         優先フラグ → 新人固定席 → 教官・OJT → 固定席 → 隣接禁止 → 要サポート → 禁止席のみの対象者 → その他
   //   段階2（上限）: 優先フラグ → 新人固定席 → 教官・OJT → 隣接禁止 → 固定席 → 要サポート → 禁止席のみの対象者 → その他
   // ・「隣接禁止対象者」= secret.csvの隣接禁止に載っている人（禁止席も併せ持つ人を含む）。
-  // ・「禁止席のみの対象者」= 禁止席だけに載っている人。ver4.10までは隣接禁止対象者と
-  //   一括で全探索していたが、ver4.11からは分離し、要サポートの後（繰り上げ時も同位置）に
-  //   配置する。ver4.12からは、この分離した枠の中で改めて全探索backtrackを行う
+  // ・「禁止席のみの対象者」= 禁止席だけに載っている人。ver0.4.10までは隣接禁止対象者と
+  //   一括で全探索していたが、ver0.4.11からは分離し、要サポートの後（繰り上げ時も同位置）に
+  //   配置する。ver0.4.12からは、この分離した枠の中で改めて全探索backtrackを行う
   //   （findFeasibleAssignment。解が1つ見つかった時点で確定し、採点はしない）。
   //   MRV貪欲は、解なし・時間切れのときのフォールバックとしてのみ使う。
   // ・繰り上げにより隣接禁止ステップが固定席・要サポートより先に来た場合、対象者が
@@ -745,7 +758,7 @@ window.SeatTool.algorithm = (function () {
    *       メッセージも出さない）
    *     - secret.csvで「夜勤GL席」に固定席されている人が、選ばれず座席1〜15に
    *       配置された場合、「夜勤GL席」バッジを表示するためのフラグが付く
-   *   options.adjacentEscalationLevel（ver4.11で追加）: 隣接禁止ステップの繰り上げ段階
+   *   options.adjacentEscalationLevel（ver0.4.11で追加）: 隣接禁止ステップの繰り上げ段階
    *   （0〜ADJACENT_ESCALATION_MAX_LEVEL。省略時0＝従来と同じ位置）。
    *
    * 戻り値: { state, overflow, logs }
@@ -754,7 +767,7 @@ window.SeatTool.algorithm = (function () {
    *   logs: [{ level:'info'|'warn'|'error', message, showDialog? }]
    */
   /**
-   * assignSeats（貪欲+MRV）と assignSeatsExhaustive（全探索backtrack。ver4.7で追加）の
+   * assignSeats（貪欲+MRV）と assignSeatsExhaustive（全探索backtrack。ver0.4.7で追加）の
    * 両方から呼び出される共通の下ごしらえ処理。
    * 優先フラグと、繰り上げ段階に応じた「隣接禁止ステップより前の各ステップ」までを
    * 確定させ、残った隣接禁止対象者（adjacencyPeople）をどう配置するかは
@@ -779,7 +792,7 @@ window.SeatTool.algorithm = (function () {
 
     const people = shiftRows.map((r, idx) => ({
       name: r.name, start: r.start, end: r.end,
-      // 同日2回勤務を区別する識別子。〈ver4.18で追加〉
+      // 同日2回勤務を区別する識別子。〈ver0.4.18で追加〉
       // 通常はcsv.jsが付与する「氏名|開始時刻」。保存データの復元や、
       // pkeyを持たない古い呼び出し元から渡された場合はここで補完する。
       pkey: r.pkey || `${r.name}|${r.start}`,
@@ -789,7 +802,7 @@ window.SeatTool.algorithm = (function () {
       // 2人目以降も座席に配置されるため、役割を保持しておく（夜勤GL枠が空になって
       // いないかの違反チェックで「座席側に夜勤の役席・GLがいるか」の判定に使う）
       role: r.role || 'OP',
-      isRookie: false, rookieRank: null,
+      isRookie: false, rookieRank: null, rookieDegree: null,
       hasAdjacentRule: adjacentRuleNames.has(r.name),
       hasForbiddenSeatRule: forbiddenSeatRuleNames.has(r.name),
       isDesignated: designatedNames.has(r.name),
@@ -807,14 +820,16 @@ window.SeatTool.algorithm = (function () {
       // 要サポート（secret.csv「要サポート」種別）バッジ表示用
       isSupport: supportNames.has(r.name),
       supportSeatNumbers: (supportSeatsMap.get(r.name) || []).map(numberOfKey),
-      // 優先フラグ（secret.csv5列目）。バッジ表示はしないが、デバッグ・参照用に保持
+      // 優先フラグ（secret.csv5列目）。数値は配置順の決定・デバッグ・参照用に保持し、
+      // hasPriorityFlagは「優先」バッジの表示用（数値は表示しない）
       priorityFlag: priorityFlagMap.has(r.name) ? priorityFlagMap.get(r.name) : null,
+      hasPriorityFlag: priorityFlagMap.has(r.name),
     }));
     // 氏名 -> オブジェクト。ojt.csv / rookie.csv / secret.csv は氏名で人を指すため、
     // それらの照合には引き続きこのMapを使う。〈同日2回勤務では後の1件が前を上書き
-    // するが、2回勤務者はこれらのCSVの対象外という前提のため実害はない。ver4.18〉
+    // するが、2回勤務者はこれらのCSVの対象外という前提のため実害はない。ver0.4.18〉
     const byName = new Map(people.map(p => [p.name, p]));
-    // pkey（氏名|開始時刻）-> オブジェクト。〈ver4.18で追加〉
+    // pkey（氏名|開始時刻）-> オブジェクト。〈ver0.4.18で追加〉
     // 同日2回勤務でも1件ずつ別人として引ける。座席の配置・復元にはこちらを使う。
     const byKey = new Map(people.map(p => [p.pkey, p]));
 
@@ -834,7 +849,7 @@ window.SeatTool.algorithm = (function () {
     const baseCtx = { state, overflow, logs, placedNames };
 
     // 優先フラグが同数値のときの並び替えに使う「配置ルール順」
-    // （新人 > 教官・OJT > 固定席 > 要サポート > その他。ver4.16で順序変更）
+    // （新人 > 教官・OJT > 固定席 > 要サポート > その他。ver0.4.16で順序変更）
     const rookieNameSet = new Set(rookieRows.map(r => r.name));
     function ruleRank(name) {
       if (rookieNameSet.has(name)) return 0;
@@ -889,7 +904,12 @@ window.SeatTool.algorithm = (function () {
       const person = byName.get(n.name);
       return !!person && !placedNames.has(person.pkey);
     });
-    matchedRookieRows.forEach(n => { byName.get(n.name).isRookie = true; });
+    // rookieDegree はバッジ順位の再計算（保存データ読み込み後）に使うため保持する〈ver0.4.19〉
+    matchedRookieRows.forEach(n => {
+      const person = byName.get(n.name);
+      person.isRookie = true;
+      person.rookieDegree = n.degree;
+    });
     const rookieCandidates = matchedRookieRows.map(n => ({ ...byName.get(n.name), degree: n.degree }));
     rookieCandidates.sort((a, b) => {
       if (a.degree !== b.degree) return a.degree - b.degree; // 数値が小さいほど新人=優先
@@ -904,22 +924,37 @@ window.SeatTool.algorithm = (function () {
     // ---- 0. 新人（固定席）の配置 ----
     // 繰り上げの最終段階で隣接禁止ステップが先に来た場合、隣接禁止側で既に配置された
     // 新人はここでは飛ばす（rookieRankバッジは付いたまま）。
+    //
+    // 〈ver0.5.1で変更〉新人固定席は ROOKIE_DEFAULT_SEAT_ORDER の先頭から順に空きを探す。
+    // ver0.5.0までは「新人N人目は配列のN番目の席のみ」を試していたため、優先フラグなど
+    // より優先度の高いステップで先に埋まっていると即座に諦めて通常探索へ回っていた。
+    // 新人1が5番に座れない場合は10番、次は6番…と繰り下げ、後続の新人はその残りから
+    // 同じく先頭順で探す。rookieRank（バッジ表示）は実際に座った席とは無関係に
+    // 上流で確定済みのため、繰り下げが起きても「新人1」「新人2」の表示は変わらない。
     function stepRookies(ctx) {
       const fallbackQueue = [];
       rookieTop.forEach(person => {
         if (ctx.placedNames.has(person.pkey)) return;
-        const targetSeatNumber = ROOKIE_DEFAULT_SEAT_ORDER[person.rookieRank - 1];
-        const targetSeat = seatByNumber(targetSeatNumber);
-        // 新人固定席は「新人○番目はこの座席」と明示的に決まっている座席のため、
+        // 新人固定席は「新人はこの座席群に座る」と明示的に決まっている座席のため、
         // 仮に座席9番が対象になった場合でも明示指定として扱う（allowSeat9=true）。
-        if (targetSeat && canPlace(person, targetSeat, ctx.state, forbiddenSeatSet, forbiddenPairSet, true)) {
+        let placed = false;
+        for (const seatNumber of ROOKIE_DEFAULT_SEAT_ORDER) {
+          const targetSeat = seatByNumber(seatNumber);
+          if (!targetSeat) continue;
+          if (!canPlace(person, targetSeat, ctx.state, forbiddenSeatSet, forbiddenPairSet, true)) continue;
           seatPerson(ctx.state, targetSeat.key, person);
           ctx.placedNames.add(person.pkey);
           noteSeat9IfUsed(targetSeat, person.name, '新人固定席', ctx.logs);
-        } else {
+          placed = true;
+          break;
+        }
+        if (!placed) {
+          // 新人固定席がすべて埋まっている／座れない場合のみ警告する。
+          // 現実には新人が同時に7人発生することは想定していないため、
+          // ここに来る場合は入力データの矛盾を疑う。
           ctx.logs.push({
             level: 'warn', showDialog: true,
-            message: `${person.name}さんの配置条件をよく確認してください（新人固定席 ${targetSeatNumber}番 に配置できません）`,
+            message: `${person.name}さんの配置条件をよく確認してください（新人固定席 ${ROOKIE_DEFAULT_SEAT_ORDER.join('・')}番 のいずれにも配置できません）`,
           });
           fallbackQueue.push(person);
         }
@@ -999,7 +1034,7 @@ window.SeatTool.algorithm = (function () {
       }
     }
 
-    // 汎用backtrack探索（禁止席のみの対象者の最適配置に使用。ver4.12で追加）。
+    // 汎用backtrack探索（禁止席のみの対象者の最適配置に使用。ver0.4.12で追加）。
     // buildBaseAssignment の内側に置いてあるが、外側の変数は一切参照せず引数だけで
     // 完結している（＝クロージャに依存しない純粋関数）。
     // remainingの全員を、state上の空き座席にcanPlace()を満たす形ですべて配置できる
@@ -1064,10 +1099,10 @@ window.SeatTool.algorithm = (function () {
     // ---- 禁止席のみの対象者（隣接禁止には載っていない人）の配置 ----
     // どの繰り上げ段階でも、要サポートの後・その他の前に実行する。
     // mode='greedy'（既定。assignSeatsの貪欲フォールバックで使用）:
-    //   ver4.10までと同じ、「最も制約がきつい人（＝今この時点で座れる座席が最も少ない人）」
+    //   ver0.4.10までと同じ、「最も制約がきつい人（＝今この時点で座れる座席が最も少ない人）」
     //   から順に置いていくMRV貪欲。1手ごとには最適でも、全体として実は別の組み合わせなら
     //   全員置けた、というケースを取りこぼす可能性がある。
-    // mode='exhaustive'（ver4.12で追加。全探索側で使用）:
+    // mode='exhaustive'（ver0.4.12で追加。全探索側で使用）:
     //   まずfindFeasibleAssignmentで全員を配置できる組み合わせが存在するか
     //   backtrackで探し、見つかればそれをそのまま採用する（＝全員配置できる組み合わせが
     //   1つでも存在する限り、必ず全員配置できる。隣接禁止対象者と同様に最適）。
@@ -1075,7 +1110,7 @@ window.SeatTool.algorithm = (function () {
     //   greedyモードにフォールバックし、その旨をlogsに積む。
     // seatsOrder（省略可。mode='exhaustive'のときのみ使用。既定はSEATS＝座席番号順）:
     //   backtrackが座席を試す順序。既定の座席番号順だと毎回同じ組み合わせが
-    //   見つかるため、シャッフル機能（ver4.15）ではshuffle(SEATS)を渡し、
+    //   見つかるため、シャッフル機能（ver0.4.15）ではshuffle(SEATS)を渡し、
     //   複数の有効な組み合わせがある場合にランダムに切り替わるようにする。
     function placeForbiddenOnlyGroup(ctx, deterministic, mode, clock, seatsOrder) {
       const group = people.filter(p =>
@@ -1155,7 +1190,7 @@ window.SeatTool.algorithm = (function () {
 
     // 繰り上げで後回しになったステップ（禁止席のみの対象者は含まない）だけを実行する。
     // 全探索側で、「禁止席のみの対象者を配置する直前」のスナップショットを
-    // 取るために、placeForbiddenOnlyGroupと分けて呼べるようにしている（ver4.15）。
+    // 取るために、placeForbiddenOnlyGroupと分けて呼べるようにしている（ver0.4.15）。
     function runPostponedSteps(ctx) {
       for (const step of postSteps) step(ctx);
     }
@@ -1231,7 +1266,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   // ---- 5. その他スタッフ（出勤時刻が早い順）。assignSeats / assignSeatsExhaustive共通 ----
-  // deterministic=true（ver4.8で追加）のときは座席探索をランダムにせず座席番号順で行う。
+  // deterministic=true（ver0.4.8で追加）のときは座席探索をランダムにせず座席番号順で行う。
   // 全探索backtrackで、隣接禁止対象者側の案を「次案を表示」で切り替えても
   // その他スタッフが無関係に動き回らないようにするための決定的モード。
   // 省略時はfalse（従来どおりランダム＝通常のassignSeatsの挙動）。
@@ -1247,7 +1282,7 @@ window.SeatTool.algorithm = (function () {
    * 貪欲法（+MRVによる並び替え）による通常の座席割り当て。詳細はbuildBaseAssignmentと
    * 各ステップのコメントを参照。全探索（assignSeatsWithEscalation）が最終段階まで
    * 繰り上げても解けなかった・時間切れだった場合の最終フォールバックとして使う。
-   * ver4.13から、呼び出し側（ui.js）はこの最終フォールバック時にoptions.adjacentEscalationLevel
+   * ver0.4.13から、呼び出し側（ui.js）はこの最終フォールバック時にoptions.adjacentEscalationLevel
    * にADJACENT_ESCALATION_MAX_LEVEL（段階2＝教官・OJTの直後に隣接禁止）を渡し、
    * 全探索で最後に試した優先順位のまま貪欲法で配置する。省略時は既定の段階0
    * （通常の優先順位）で配置する。
@@ -1325,8 +1360,8 @@ window.SeatTool.algorithm = (function () {
   // 全探索backtrack（全パターン検索）
   // 隣接禁止・禁止席対象者の配置を担当する。普段の貪欲+MRV（assignSeats）
   // とはロジックの性格が異なる（実際にすべての組み合わせを尽くす）ため、可読性のために
-  // ここでセクションを分けている（旧ver4.8まではalgorithmExhaustive.jsという別ファイルに
-  // 分離していたが、ver4.9でこのファイルへ統合した。読み込むファイルが1つで済むほか、
+  // ここでセクションを分けている（旧ver0.4.8まではalgorithmExhaustive.jsという別ファイルに
+  // 分離していたが、ver0.4.9でこのファイルへ統合した。読み込むファイルが1つで済むほか、
   // window.SeatTool.algorithm 内で完結するため<script>タグの順序を気にする必要もない）。
   // 「自動配置を実行」のたびに日勤・夜勤それぞれでこれを試し、解けた場合はそれを採用、
   // 解けない場合（証明つきで解なし、またはタイムアウト）にのみ貪欲+MRV（assignSeats）に
@@ -1379,10 +1414,10 @@ window.SeatTool.algorithm = (function () {
    * assignSeats（貪欲+MRV+乱数リトライ）では「たまたま見つからなかっただけ」の
    * 可能性が残るのに対し、こちらは実際にすべての座席割り当てを尽くすため、
    * 「本当に解が存在するか」を（タイムアウトしない限り）証明つきで判定できる。
-   * ver4.10までは禁止席のみの対象者も一括で探索していたが、ver4.11からは
+   * ver0.4.10までは禁止席のみの対象者も一括で探索していたが、ver0.4.11からは
    * この関数の探索対象を隣接禁止対象者のみに絞り、禁止席のみの対象者は要サポートの後に
    * 別枠で配置する（buildBaseAssignmentのplaceForbiddenOnlyGroup参照）。
-   * その別枠でも ver4.12 から全探索backtrackを行うため、禁止席のみの対象者も
+   * その別枠でも ver0.4.12 から全探索backtrackを行うため、禁止席のみの対象者も
    * 貪欲ではなく全探索で配置される（違いは、こちらが複数解を集めて採点・比較するのに対し、
    * 向こうは実行可能解を1つ見つけた時点で確定し採点しない点）。
    *
@@ -1401,7 +1436,7 @@ window.SeatTool.algorithm = (function () {
    *   maxSolutions: 最終的に返す上位解の件数（既定20。「次案を表示」ボタンで一巡できる件数の目安）。
    *                 実運用ではui.jsが EXHAUSTIVE_MAX_SOLUTIONS=99 を渡すため、既定値は使われない。
    *   poolCap:      採点前に内部的に集める解の件数の上限（既定100。多すぎると採点コストが増えるため上限を設ける）
-   *                 ver4.17から、呼び出し側（ui.js）は poolCap = maxSolutions + 1 を渡す。
+   *                 ver0.4.17から、呼び出し側（ui.js）は poolCap = maxSolutions + 1 を渡す。
    *                 こうすると「maxSolutions件を表示しきってもなお解が残っている」ことを
    *                 hitPoolCap で正確に判定でき、メッセージの「○通り以上」を厳密に出せる。
    *   timeBudgetMs: 探索の制限時間（既定5000ms=5秒。隣接禁止対象者は通常少人数のはずで、
@@ -1429,7 +1464,7 @@ window.SeatTool.algorithm = (function () {
    *     stateBeforeOthers, overflowBeforeOthers,     「その他」を配置する直前の状態
    *     logsBeforeOthers, placedNamesBeforeOthers,   （禁止席のみの対象者は配置済み）
    *     stateBeforeForbiddenAndOthers,                「禁止席のみの対象者・その他」を
-   *     overflowBeforeForbiddenAndOthers,             配置する直前の状態（ver4.15で追加。
+   *     overflowBeforeForbiddenAndOthers,             配置する直前の状態（ver0.4.15で追加。
    *     logsBeforeForbiddenAndOthers,                 reshuffleForbiddenAndOthers用に保持）
    *     placedNamesBeforeForbiddenAndOthers,
    *   }],  スコア順（良い順）の上位solutions。採点は
@@ -1451,7 +1486,7 @@ window.SeatTool.algorithm = (function () {
     // 既定値は、呼び出し側（ui.js）が値を渡さなかった場合のみ使われる。実運用では
     // ui.js が EXHAUSTIVE_MAX_SOLUTIONS / EXHAUSTIVE_POOL_CAP / EXHAUSTIVE_TIME_BUDGET_MS を
     // 常に明示的に渡すため、ここの既定値は実質テスト・直接呼び出し用。
-    // 「既定値と実運用値が食い違っている」状態を避けるため、ver4.17の実運用値に揃えてある。
+    // 「既定値と実運用値が食い違っている」状態を避けるため、ver0.4.17の実運用値に揃えてある。
     const maxSolutions = opts.maxSolutions || 20;
     const poolCap = opts.poolCap || 100;
     const timeBudgetMs = opts.timeBudgetMs || 5000;
@@ -1596,7 +1631,7 @@ window.SeatTool.algorithm = (function () {
     function buildFullResult(assignedMap) {
       // 隣接禁止対象者(adjacencyPeople)まで確定させたら、繰り上げで後回しになった
       // ステップ（要サポート等）を先に配置し、その状態を「禁止席のみの対象者・
-      // その他」を配置する直前のスナップショットとして保持しておく（ver4.15）。
+      // その他」を配置する直前のスナップショットとして保持しておく（ver0.4.15）。
       // これにより、あとから reshuffleForbiddenAndOthers() で隣接禁止対象者・
       // 固定席・要サポート・教官OJT・新人固定席側の配置はそのままに、
       // 禁止席のみの対象者とその他だけを配置し直せる（シャッフルボタン用）。
@@ -1608,7 +1643,7 @@ window.SeatTool.algorithm = (function () {
       };
       // 指定席（固定席・要サポート）どおりに配置できなかった対象者の人数（採点用）
       let preferredMiss = 0;
-      // assignedMapはpkey（氏名|開始時刻）で持つ。〈ver4.18〉
+      // assignedMapはpkey（氏名|開始時刻）で持つ。〈ver0.4.18〉
       // 一方、固定席・要サポートの指定（secret.csv）は氏名で紐づいたままのため、
       // preferredSeatsOf / preferredKeySetOf の参照には人の氏名を使う。
       for (const [pkey, seatKey] of assignedMap.entries()) {
@@ -1632,7 +1667,7 @@ window.SeatTool.algorithm = (function () {
       const overflowBeforeForbiddenAndOthers = ctx.overflow.slice();
       const logsBeforeForbiddenAndOthers = ctx.logs.slice();
 
-      // 禁止席のみの対象者もforbiddenMode='exhaustive'で全探索する（ver4.12）。
+      // 禁止席のみの対象者もforbiddenMode='exhaustive'で全探索する（ver0.4.12）。
       // deterministic=true・座席番号順（既定のSEATS順）: 案を切り替えたときに
       // 無関係な人が動いて見えないよう、常に同じ組み合わせを選ぶ。
       // clockはこの段階の主探索（隣接禁止対象者のbacktrack）と同じ{startTime, timeBudgetMs}を
@@ -1685,7 +1720,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   /**
-   * 隣接禁止の繰り上げ再探索つき全探索（ver4.11で追加）。
+   * 隣接禁止の繰り上げ再探索つき全探索（ver0.4.11で追加）。
    * まず段階0（通常の優先順位）で assignSeatsExhaustive を実行し、隣接禁止対象者
    * 全員を配置できる解が見つからなかった場合（解なしと証明された場合・制限時間で
    * 打ち切られた場合の両方）は、隣接禁止ステップを1段階前へ繰り上げて再探索する。
@@ -1727,7 +1762,7 @@ window.SeatTool.algorithm = (function () {
   /**
    * 隣接禁止対象者・固定席・要サポート・教官OJT・新人固定席側の座席はそのままに、
    * 「禁止席のみの対象者」と「その他」スタッフをまとめて配置し直す
-   * （シャッフルボタン用。ver4.15。旧reshuffleOthersを改称・拡張）。
+   * （シャッフルボタン用。ver0.4.15。旧reshuffleOthersを改称・拡張）。
    * 禁止席のみの対象者は、座席の探索順をランダム化した全探索backtrackで
    * 別の有効な組み合わせを探す（複数の組み合わせが存在すればランダムに切り替わる。
    * 1通りしかない場合は毎回同じ結果になる）。制限時間内に見つからなかった場合は
@@ -1825,7 +1860,7 @@ window.SeatTool.algorithm = (function () {
   }
 
   // ============================================================
-  // 夜勤の役席・GLの配置（ver4.2）
+  // 夜勤の役席・GLの配置（ver0.4.2）
   // ・二重配置（GL枠＋座席の両方に表示）は行わない。日勤と同様に1人1か所へ配置する。
   // ・1名のみの場合: 夜勤GL枠の「2行1列目」へ配置する
   // ・2名以上の場合: 1名を夜勤GL枠2行1列目へ。
@@ -1874,7 +1909,7 @@ window.SeatTool.algorithm = (function () {
       glPerson = pool[Math.floor(Math.random() * pool.length)];
       // 候補が複数いてランダム選出になった場合のみ通知する。
       // 固定席「夜勤GL席」の該当者が1名で、その人がそのまま夜勤GL枠に
-      // 入った場合は、指定どおりの結果のためメッセージは出さない（ver4.5）。
+      // 入った場合は、指定どおりの結果のためメッセージは出さない（ver0.4.5）。
       if (pool.length > 1) {
         const poolLabel = flagged.length > 0 ? '固定席（夜勤GL席）のある' : '';
         logs.push({ level: 'info', message: `夜勤GL枠（2行1列目）には、${poolLabel}${pool.length}名の中からランダムで${glPerson.name}さんを配置しました。` });
@@ -1892,15 +1927,15 @@ window.SeatTool.algorithm = (function () {
     buildSecretIndexes, buildAdjacentGroups, canPlace, overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat,
     assignLeaderAreas, assignNightLeaders,
-    buildOjtIndexes,
+    buildOjtIndexes, buildRookieIndexes,
     countValidSeats, detectStaticContradictions,
     buildBaseAssignment,
     // 以下は内部関数だが、全探索backtrackやテストから使うために公開している
     seatPerson, slotOccupants, shuffle, placeOthers,
     SEATS_IN_NUMBER_ORDER, findSeat, findSeatAmongCandidates,
-    // 全探索backtrack（全パターン検索。ver4.9でこのファイルに統合）
+    // 全探索backtrack（全パターン検索。ver0.4.9でこのファイルに統合）
     assignSeatsExhaustive, reshuffleForbiddenAndOthers, scoreSolution,
-    // 隣接禁止の繰り上げ再探索（ver4.11で追加）
+    // 隣接禁止の繰り上げ再探索（ver0.4.11で追加）
     assignSeatsWithEscalation, ADJACENT_ESCALATION_MAX_LEVEL,
   };
 })();
