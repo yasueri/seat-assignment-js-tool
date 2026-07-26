@@ -13,7 +13,8 @@
   } = NS.csv;
   const {
     SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
-    buildSecretIndexes, buildAdjacentGroups, overlaps, isForbiddenPair,
+    buildSecretIndexes, buildAdjacentGroups, buildAdjacentPairs, formatAdjacentLabel,
+    overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat, buildOjtIndexes, buildRookieIndexes,
     assignSeatsWithEscalation, reshuffleForbiddenAndOthers, ADJACENT_ESCALATION_MAX_LEVEL,
   } = NS.algorithm;
@@ -76,6 +77,16 @@
     nightSeats: initEmptyState(), nightGL: initLeaderState(), nightSpare: initLeaderState(),
     nightOverflow: [],
     ruleIndexes: null, adjacentGroupLetters: null,
+    // 隣接禁止のペア単位の情報（氏名 -> [{ letter, partner }, …]）。〈ver0.5.4で追加〉
+    // 「相手が本日出勤しているペアの記号だけ残す」判定に使う。
+    adjacentPairs: null,
+    // その日出勤している人の氏名（日勤側／夜勤側で別々に持つ）。〈ver0.5.4で追加〉
+    // 隣接禁止バッジ・教官バッジの出し分けに使う。日勤の座席表と夜勤の座席表は
+    // 完全に別物で、日勤の人と夜勤の人が隣り合ったり同席したりすることはないため、
+    // 判定も必ず同じ側の中だけで行う。
+    // nullのとき（自動配置も保存データ読み込みもまだの状態）は出し分けを行わない
+    // ＝従来どおり全部表示する。
+    dayPresentNames: null, nightPresentNames: null,
     currentDateLabel: null, currentDate: null,
     // secret.csvのパース結果（保存ファイルへの書き出しと、読み込み時の
     // ruleIndexes / adjacentGroupLetters の再構築に使う）
@@ -309,6 +320,7 @@
     appState.secretRows = secretParsed.rows;
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
+    appState.adjacentPairs = buildAdjacentPairs(secretParsed.rows);
     // 全探索backtrackの候補は旧secret.csvの内容で計算済みのため、ここでは無効化する
     // （「次案を表示」「一部シャッフル」ボタンを押すと矛盾した内容になってしまうため）
     appState.dayExhaustive = null;
@@ -318,6 +330,7 @@
     renderMessages([
       ...secretParsed.logs,
       { level: 'info', message: 'secret.csvを読み込み、違反チェック用のルールとバッジ表示を更新しました。' },
+      ...buildBadgeVisibilityLogs(),
     ]);
     scrollToMessages();
   }
@@ -340,6 +353,7 @@
     renderMessages([
       ...ojtParsed.logs,
       { level: 'info', message: 'ojt.csvを読み込み、教官・OJTのバッジ表示を更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
+      ...buildBadgeVisibilityLogs(),
     ]);
     scrollToMessages();
   }
@@ -759,6 +773,12 @@
     appState.nightOverflow = nightResult.overflow;
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
+    appState.adjacentPairs = buildAdjacentPairs(secretParsed.rows);
+    // 隣接禁止バッジ・教官バッジの出し分けに使う「その日の出勤者」を、日勤側・
+    // 夜勤側それぞれで確定させる。〈ver0.5.4で追加〉座席に並ぶ人だけでなく、
+    // 早番・遅番エリアへ回った役席・GLも出勤者として数える。
+    appState.dayPresentNames = new Set([...opRows, ...leaderRows].map(r => r.name));
+    appState.nightPresentNames = new Set([...nightOpRows, ...nightLeaderRows].map(r => r.name));
     appState.secretRows = secretParsed.rows;
     appState.ojtRows = ojtParsed.rows;
     appState.ojtIndexes = ojtIndexes;
@@ -772,6 +792,9 @@
     // 計算時間の計測終了。「自動配置を実行」ボタンの右側に表示する。
     const calcElapsedMs = Math.round(performance.now() - calcStartTime);
     els.calcTime.textContent = `計算時間：${calcElapsedMs}ms`;
+
+    // 出勤状況で非表示にしたバッジのお知らせ（ver0.5.4）。appStateへの反映後に作る。
+    allLogs.push(...buildBadgeVisibilityLogs());
 
     renderMessages(allLogs);
     render();
@@ -869,6 +892,7 @@
         isOjtTrainee: idx.isTrainee.has(name),
         ojtMentorName: idx.mentorOf.get(name) || null,
         ojtTraineeNames: idx.traineesOf.get(name) || [],
+        ojtGroupLetter: (idx.letterOf && idx.letterOf.get(name)) || null,
       };
     }
     if (existing) {
@@ -877,9 +901,160 @@
         isOjtTrainee: !!existing.isOjtTrainee,
         ojtMentorName: existing.ojtMentorName || null,
         ojtTraineeNames: Array.isArray(existing.ojtTraineeNames) ? existing.ojtTraineeNames : [],
+        ojtGroupLetter: existing.ojtGroupLetter || null,
       };
     }
-    return { isOjtMentor: false, isOjtTrainee: false, ojtMentorName: null, ojtTraineeNames: [] };
+    return {
+      isOjtMentor: false, isOjtTrainee: false, ojtMentorName: null,
+      ojtTraineeNames: [], ojtGroupLetter: null,
+    };
+  }
+
+  // ---------- 出勤状況によるバッジの出し分け（ver0.5.4で追加） ----------
+  // 隣接禁止バッジと教官バッジは、相手（隣接禁止のペア相手／OJT対象者）が
+  // その日出勤していなければ意味を持たないため、非表示にする。
+  //
+  // 判定の基準は「その日出勤しているか」で固定し、「いま座席表のどこにいるか」は
+  // 見ない。手動でカードを動かすたびにバッジが増減すると現場が混乱するのと、
+  // メッセージ欄は自動配置・ファイル読み込みのときしか描き直されないため、
+  // 配置基準にするとバッジとメッセージの内容がズレてしまうため。
+  //
+  // 日勤側と夜勤側は必ず別々に判定する（座席表が別物で、日勤の人と夜勤の人が
+  // 隣り合ったり同席したりすることはないため）。
+
+  // 位置（loc）が夜勤側かどうか。座席カードは seat / nightSeat / overflow /
+  // nightOverflow のいずれかに置かれる。
+  function isNightSideLoc(loc) {
+    return !!loc && typeof loc.type === 'string' && loc.type.indexOf('night') === 0;
+  }
+
+  // その側の出勤者の氏名の集合。未確定（自動配置も保存データ読み込みもまだ）なら null。
+  function presentNamesFor(isNightSide) {
+    return isNightSide ? appState.nightPresentNames : appState.dayPresentNames;
+  }
+
+  // 座席表に並んでいる人から出勤者を拾う（保存データを読み込んだときに使う。
+  // 保存ファイルには月間シフトCSVが含まれないため、画面に並んでいる人＝その日の
+  // 出勤者とみなす）。早番・遅番・夜勤GL枠・予備枠の人も出勤者として数える。
+  function collectPresentNamesFromBoard() {
+    const day = new Set();
+    const night = new Set();
+    const add = (set, p) => { if (p && p.name) set.add(p.name); };
+    for (const s of SEATS) {
+      for (let i = 0; i < 2; i++) {
+        add(day, appState.seats[s.key][i]);
+        add(night, appState.nightSeats[s.key][i]);
+      }
+    }
+    (appState.overflow || []).forEach(p => add(day, p));
+    (appState.nightOverflow || []).forEach(p => add(night, p));
+    [appState.early, appState.late].forEach(area => {
+      Object.keys(area || {}).forEach(k => add(day, area[k]));
+    });
+    [appState.nightGL, appState.nightSpare].forEach(area => {
+      Object.keys(area || {}).forEach(k => add(night, area[k]));
+    });
+    return { day, night };
+  }
+
+  // その人の隣接禁止のペアを「相手が出勤している／していない」で仕分ける。
+  // 判定材料が揃わない場合（出勤者未確定・ペア情報なし）は evaluated:false を返し、
+  // 呼び出し側は従来どおりの表示に戻す。
+  function splitAdjacentPairsByPresence(name, isNightSide) {
+    const present = presentNamesFor(isNightSide);
+    const entries = appState.adjacentPairs ? appState.adjacentPairs.get(name) : null;
+    if (!present || !entries || entries.length === 0) {
+      return { evaluated: false, shown: [], hidden: [] };
+    }
+    return {
+      evaluated: true,
+      shown: entries.filter(e => present.has(e.partner)),
+      hidden: entries.filter(e => !present.has(e.partner)),
+    };
+  }
+
+  // 隣接禁止バッジの2行目に出す記号を返す。相手が1人も出勤していない場合は
+  // null（＝バッジ自体を表示しない）。
+  function adjacentBadgeLabel(person, isNightSide) {
+    const split = splitAdjacentPairsByPresence(person.name, isNightSide);
+    if (!split.evaluated) return person.adjacentGroupLetter || '';
+    if (split.shown.length === 0) return null;
+    return formatAdjacentLabel(split.shown.map(e => e.letter)) || '';
+  }
+
+  // その側にOJT対象者が1名でも出勤しているか。1名もいない日は、その側の
+  // 教官バッジをすべて非表示にする（担当が自分のOJT対象者かどうかは問わない。
+  // 担当0名の教官でも、他の教官が不在のときの振り分け先になり得るため、
+  // 「教官ごとに担当者がいるか」ではなく「全体で1名でもいるか」で判定する）。
+  function hasAnyTraineePresent(isNightSide) {
+    const present = presentNamesFor(isNightSide);
+    const idx = appState.ojtIndexes;
+    if (!present || !idx) return true; // 判定材料が無ければ従来どおり表示する
+    for (const traineeName of idx.isTrainee) {
+      if (present.has(traineeName)) return true;
+    }
+    return false;
+  }
+
+  // バッジが表示されるエリア（座席グリッドとあふれ）にいる人を、側ごとに集める。
+  // メッセージの文面を作るために使う。
+  function badgeAreaPeople(isNightSide) {
+    const seatState = isNightSide ? appState.nightSeats : appState.seats;
+    const overflowList = isNightSide ? appState.nightOverflow : appState.overflow;
+    const people = [];
+    for (const s of SEATS) {
+      for (let i = 0; i < 2; i++) {
+        if (seatState[s.key][i]) people.push(seatState[s.key][i]);
+      }
+    }
+    (overflowList || []).forEach(p => { if (p) people.push(p); });
+    return people;
+  }
+
+  // 出勤状況で非表示にしたバッジについて、メッセージ欄に出すお知らせを作る。
+  // 「自動配置を実行」「保存データの読み込み」「secret.csv / ojt.csvの読み込み」の
+  // タイミングで呼ぶ。
+  function buildBadgeVisibilityLogs() {
+    const logs = [];
+    [['日勤', false], ['夜勤', true]].forEach(([sideLabel, isNightSide]) => {
+      if (!presentNamesFor(isNightSide)) return;
+      const people = badgeAreaPeople(isNightSide);
+
+      // --- 隣接禁止（全部消えた人だけでなく、一部だけ消えた人も知らせる） ---
+      const notified = new Set();
+      people.forEach(p => {
+        if (!p.hasAdjacentRule || notified.has(p.name)) return;
+        notified.add(p.name);
+        const split = splitAdjacentPairsByPresence(p.name, isNightSide);
+        if (!split.evaluated || split.hidden.length === 0) return;
+        const absent = split.hidden.map(e => `${e.partner}さん`).join('、');
+        if (split.shown.length === 0) {
+          logs.push({
+            level: 'info',
+            message: `【${sideLabel}】${p.name}さんの隣接禁止の相手（${absent}）が本日出勤していないため、「隣禁止」バッジを表示していません。`,
+          });
+        } else {
+          const hiddenLetters = split.hidden.map(e => e.letter).join('・');
+          const shownLabel = formatAdjacentLabel(split.shown.map(e => e.letter));
+          logs.push({
+            level: 'info',
+            message: `【${sideLabel}】${p.name}さんの隣接禁止のうち、記号${hiddenLetters}の相手（${absent}）が本日出勤していないため、「隣禁止」バッジは記号${shownLabel}のみの表示にしています。`,
+          });
+        }
+      });
+
+      // --- 教官（OJT対象者が1名も出勤していない日） ---
+      if (appState.ojtIndexes && !hasAnyTraineePresent(isNightSide)) {
+        const mentors = Array.from(new Set(people.filter(p => p.isOjtMentor).map(p => p.name)));
+        if (mentors.length > 0) {
+          logs.push({
+            level: 'info',
+            message: `【${sideLabel}】OJT対象者が本日1名も出勤していないため、教官（${mentors.join('さん、')}さん）の「教官」バッジを表示していません。`,
+          });
+        }
+      }
+    });
+    return logs;
   }
 
   // 指定した位置以外に、同じ人がすでにいないか確認する（手入力での重複防止）。
@@ -1032,17 +1207,28 @@
       const label = seatNumbersLabel(person.forbiddenSeatNumbers, ',');
       badges.appendChild(makeBadge('lock', '禁止席', label));
     }
+    // 隣接禁止・教官バッジは、その日の出勤状況で出し分ける（ver0.5.4）。
+    // 詳しくは splitAdjacentPairsByPresence / hasAnyTraineePresent のコメントを参照。
+    const isNightSide = isNightSideLoc(loc);
     if (person.hasAdjacentRule) {
-      badges.appendChild(makeBadge('adjacent', '隣禁止', person.adjacentGroupLetter || ''));
+      // 相手が1人も出勤していない場合は null が返り、バッジ自体を出さない。
+      // 複数ペアがある人は、相手が出勤しているペアの記号だけが残る（A・B両方持ちで
+      // Bの相手だけ出勤していれば「隣禁止 B」になる）。
+      const adjacentLabel = adjacentBadgeLabel(person, isNightSide);
+      if (adjacentLabel !== null) {
+        badges.appendChild(makeBadge('adjacent', '隣禁止', adjacentLabel));
+      }
     }
     if (person.hasNightGLDesignation) {
       badges.appendChild(makeBadge('designated', '夜勤', 'GL席'));
     }
-    if (person.isOjtMentor) {
-      badges.appendChild(makeBadge('mentor', '教官'));
+    // 教官・OJTバッジの2行目は、ojt.csvの行ごとの記号（A・B…）。
+    // 隣接禁止の記号と同じく「誰と誰の組み合わせか」を示すためのもの。
+    if (person.isOjtMentor && hasAnyTraineePresent(isNightSide)) {
+      badges.appendChild(makeBadge('mentor', '教官', person.ojtGroupLetter || ''));
     }
     if (person.isOjtTrainee) {
-      badges.appendChild(makeBadge('mentor', 'OJT'));
+      badges.appendChild(makeBadge('mentor', 'OJT', person.ojtGroupLetter || ''));
     }
     card.appendChild(badges);
 
@@ -1780,6 +1966,8 @@
       isOjtTrainee: !!p.isOjtTrainee,
       ojtMentorName: typeof p.ojtMentorName === 'string' ? p.ojtMentorName : null,
       ojtTraineeNames: Array.isArray(p.ojtTraineeNames) ? p.ojtTraineeNames.filter(n => typeof n === 'string') : [],
+      // ojt.csvの行ごとの記号（教官・OJTバッジ2行目）。〈ver0.5.4で追加〉
+      ojtGroupLetter: typeof p.ojtGroupLetter === 'string' ? p.ojtGroupLetter : null,
     };
   }
   function exportSeatState(state) {
@@ -1917,6 +2105,8 @@
       isOjtTrainee: !!p.isOjtTrainee,
       ojtMentorName: typeof p.ojtMentorName === 'string' ? p.ojtMentorName : null,
       ojtTraineeNames: Array.isArray(p.ojtTraineeNames) ? p.ojtTraineeNames.filter(n => typeof n === 'string') : [],
+      // ojt.csvの行ごとの記号（教官・OJTバッジ2行目）。〈ver0.5.4で追加〉
+      ojtGroupLetter: typeof p.ojtGroupLetter === 'string' ? p.ojtGroupLetter : null,
     };
   }
 
@@ -2051,11 +2241,13 @@
       appState.secretRows = secretParsed.rows;
       appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
       appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
+      appState.adjacentPairs = buildAdjacentPairs(secretParsed.rows);
       secretNote = { level: 'info', message: '読み込み済みのsecret.csvから、違反チェック用のルールとバッジ表示を構築しました。' };
     } else {
       appState.secretRows = null;
       appState.ruleIndexes = null;
       appState.adjacentGroupLetters = null;
+      appState.adjacentPairs = null;
       secretNote = { level: 'warn', message: 'secret.csvが読み込まれていないため、禁止席・隣接禁止・固定席の違反チェックとバッジ表示は使用できません。secret.csvを読み込むと自動的に有効になります。' };
     }
     // ojt.csv由来の情報（教官・OJTのバッジ、違反チェックでの同席の例外扱い）も
@@ -2082,6 +2274,12 @@
       appState.rookieRows = null;
       appState.rookieIndexes = null;
     }
+    // 隣接禁止バッジ・教官バッジの出し分けに使う「その日の出勤者」を確定させる。
+    // 〈ver0.5.4で追加〉保存ファイルには月間シフトCSVが含まれないため、
+    // 復元した画面に並んでいる人＝その日の出勤者とみなす。
+    const present = collectPresentNamesFromBoard();
+    appState.dayPresentNames = present.day;
+    appState.nightPresentNames = present.night;
     reapplyBadges();
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
     appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
@@ -2099,6 +2297,7 @@
     }, secretNote];
     if (ojtNote) logs.push(ojtNote);
     if (rookieNote) logs.push(rookieNote);
+    logs.push(...buildBadgeVisibilityLogs());
     if (brokenNames.length > 0) {
       logs.push({
         level: 'warn',

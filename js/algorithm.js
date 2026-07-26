@@ -200,37 +200,50 @@ window.SeatTool.algorithm = (function () {
   // 同じ記号を持つ人同士が「隣に座ってはいけない相手」を表す。
   // 1人が4ペア以上に属する場合は記号を並べず「4以上」と表示する。
   // ペアはsecret.csvの記載順に記号を振る（同じペアの重複行は1つと数える）。
-  function buildAdjacentGroups(secretRows) {
+  // 0,1,2,… を A,B,C,…,Z,AA,AB,… に変換する（隣接禁止のグループ記号と、
+  // ojt.csvの行ごとの記号で共通して使う。〈ver0.5.4で共通化〉）。
+  // 27件目以降が2文字になるのは実運用上まず発生しない想定。
+  const LETTER_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  function indexToLetter(index) {
+    let s = '';
+    let i = index + 1;
+    while (i > 0) { i -= 1; s = LETTER_CHARS[i % 26] + s; i = Math.floor(i / 26); }
+    return s;
+  }
+
+  // 記号の配列をバッジ2行目の文字列にする。4件以上は「4以上」にまとめる（従来どおり）。
+  function formatAdjacentLabel(letters) {
+    if (!letters || letters.length === 0) return null;
+    return letters.length >= 4 ? '4以上' : letters.join('');
+  }
+
+  // 隣接禁止のペアを「氏名 -> [{ letter, partner }, …]」の形で返す。〈ver0.5.4で追加〉
+  // buildAdjacentGroups は記号をまとめた表示用ラベルしか持たないため、
+  // 「相手が本日出勤しているペアだけ記号を残す」判定ができなかった。
+  // こちらはペア単位の情報を保持するので、相手の出勤有無で絞り込める。
+  function buildAdjacentPairs(secretRows) {
     const seenPairs = new Set();
-    const pairs = [];
-    secretRows.filter(r => r.type === 'adjacent_forbidden').forEach(r => {
+    const nameToPairs = new Map();
+    let index = 0;
+    (secretRows || []).filter(r => r.type === 'adjacent_forbidden').forEach(r => {
       const key = pairKey(r.name1, r.name2);
       if (seenPairs.has(key)) return;
       seenPairs.add(key);
-      pairs.push([r.name1, r.name2]);
-    });
-
-    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    // 27ペア目以降は AA, AB, … と2文字になる（実運用上まず発生しない想定）
-    const letterOf = (index) => {
-      let s = '';
-      let i = index + 1;
-      while (i > 0) { i -= 1; s = letters[i % 26] + s; i = Math.floor(i / 26); }
-      return s;
-    };
-
-    const nameToLetters = new Map();
-    pairs.forEach(([a, b], i) => {
-      const letter = letterOf(i);
-      [a, b].forEach(name => {
-        if (!nameToLetters.has(name)) nameToLetters.set(name, []);
-        nameToLetters.get(name).push(letter);
+      const letter = indexToLetter(index);
+      index += 1;
+      [[r.name1, r.name2], [r.name2, r.name1]].forEach(([name, partner]) => {
+        if (!nameToPairs.has(name)) nameToPairs.set(name, []);
+        nameToPairs.get(name).push({ letter, partner });
       });
     });
+    return nameToPairs; // name -> [{ letter: 'A', partner: '相手の氏名' }, …]
+  }
 
+  function buildAdjacentGroups(secretRows) {
+    const nameToPairs = buildAdjacentPairs(secretRows);
     const nameToLabel = new Map();
-    for (const [name, ls] of nameToLetters.entries()) {
-      nameToLabel.set(name, ls.length >= 4 ? '4以上' : ls.join(''));
+    for (const [name, entries] of nameToPairs.entries()) {
+      nameToLabel.set(name, formatAdjacentLabel(entries.map(e => e.letter)));
     }
     return nameToLabel; // name -> 'A' | 'AB' | '4以上' | ...
   }
@@ -298,13 +311,26 @@ window.SeatTool.algorithm = (function () {
     const seatOrderOf = new Map();  // 教官名 -> [座席番号, ...]（対象座席。空配列=既定順のみ）
     const isMentor = new Set();
     const isTrainee = new Set();
-    (ojtRows || []).forEach(r => {
+    // 氏名 -> グループ記号（'A' | 'B' | …）。ojt.csvの行順で1行につき1文字を振り、
+    // その行の教官とOJT対象者の全員に同じ記号を付ける。〈ver0.5.4で追加〉
+    // ※この記号は「ojt.csvに書かれた通常の組み合わせ」を表す。担当教官が不在で
+    //   他の教官へ振り分けた日は、記号の違う教官とOJT対象者が同席する
+    //   （例: 教官Bの隣にOJT Aさん）。これは不具合ではなく、
+    //   「普段はAの組み合わせの人が、今日はBの教官に付いている」という意味。
+    const letterOf = new Map();
+    (ojtRows || []).forEach((r, i) => {
+      const letter = indexToLetter(i);
       isMentor.add(r.mentorName);
       traineesOf.set(r.mentorName, r.trainees);
       seatOrderOf.set(r.mentorName, r.seatOrder || []);
-      r.trainees.forEach(t => { mentorOf.set(t, r.mentorName); isTrainee.add(t); });
+      letterOf.set(r.mentorName, letter);
+      r.trainees.forEach(t => {
+        mentorOf.set(t, r.mentorName);
+        isTrainee.add(t);
+        letterOf.set(t, letter);
+      });
     });
-    return { mentorOf, traineesOf, seatOrderOf, isMentor, isTrainee };
+    return { mentorOf, traineesOf, seatOrderOf, isMentor, isTrainee, letterOf };
   }
 
   // 対象座席（override配列）から、単独配置時の座席番号の優先順を作る
@@ -817,6 +843,8 @@ window.SeatTool.algorithm = (function () {
       isOjtTrainee: ojtIndexes.isTrainee.has(r.name),
       ojtMentorName: ojtIndexes.mentorOf.get(r.name) || null,
       ojtTraineeNames: ojtIndexes.traineesOf.get(r.name) || [],
+      // ojt.csvの行ごとの記号（教官・OJTバッジ2行目）。〈ver0.5.4で追加〉
+      ojtGroupLetter: (ojtIndexes.letterOf && ojtIndexes.letterOf.get(r.name)) || null,
       // 要サポート（secret.csv「要サポート」種別）バッジ表示用
       isSupport: supportNames.has(r.name),
       supportSeatNumbers: (supportSeatsMap.get(r.name) || []).map(numberOfKey),
@@ -1925,6 +1953,8 @@ window.SeatTool.algorithm = (function () {
   return {
     SEATS, seatExists, ADJACENCY, assignSeats,
     buildSecretIndexes, buildAdjacentGroups, canPlace, overlaps, isForbiddenPair,
+    // 隣接禁止のペア単位の情報と、記号の整形（ver0.5.4。バッジの出し分けに使う）
+    buildAdjacentPairs, formatAdjacentLabel,
     seatByNumber, numberOfKey, numberOfSeat,
     assignLeaderAreas, assignNightLeaders,
     buildOjtIndexes, buildRookieIndexes,
