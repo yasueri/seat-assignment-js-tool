@@ -1170,7 +1170,7 @@ table.badges td:first-child{white-space:nowrap;}
       </div></div>
       <div class="rrow"><div class="rlab">つまずき</div><div class="rval">
         <div class="pit"><ul>
-          <li><span class="x">×</span> 新人度合いに <code>1年目</code> など数値以外 → 読み飛ばされます。<span class="o">○</span> 半角数字だけを書く</li>
+          <li><span class="x">×</span> 新人度合いに <code>1年目</code> など数値以外 → 読み飛ばされます。<span class="o">○</span> 数字だけを書く（全角 <code>１</code> も可）</li>
           <li>同じ人を複数行書いた場合、<b>最初の行のみ</b>使われます</li>
           <li>OJT対象者が新人固定席の上位7名を兼ねる場合は、<b>新人固定席が優先</b>され、教官とは同席しません</li>
         </ul></div>
@@ -1292,6 +1292,7 @@ table.badges td:first-child{white-space:nowrap;}
           <li><span class="x">×</span> 同じ教官を2行以上に書く → エラーになります。<span class="o">○</span> 1行にまとめ、OJT対象者は「一人目」「二人目」の列に分ける（<b>3名以上は担当できません</b>）</li>
           <li><span class="x">×</span> 同じOJT対象者を複数の教官に紐づける → エラーになります</li>
           <li><span class="x">×</span> OJT一人目と二人目に同じ氏名 → その行は読み飛ばされます</li>
+          <li><span class="x">×</span> 教官名とOJT対象者に同じ氏名 → その行は読み飛ばされます</li>
         </ul></div>
       </div></div>
     </div>
@@ -1310,7 +1311,7 @@ table.badges td:first-child{white-space:nowrap;}
           <tr><td>固定席</td><td>高橋次郎</td><td class="empty"></td><td>7 11</td><td class="empty"></td></tr>
           <tr><td>固定席</td><td>近藤　美穂</td><td class="empty"></td><td>夜勤GL席</td><td class="empty"></td></tr>
         </table>
-        <p>対象2は空欄。対象座席は半角数字をスペース区切りで書きます（<code>7 11</code> → 7を優先、空いていなければ11）。<b>1人1行にまとめてください。</b></p>
+        <p>対象2は空欄。対象座席は数字をスペース区切りで書きます（<code>7 11</code> → 7を優先、空いていなければ11）。<b>1人1行にまとめてください。</b></p>
       </div></div>
       <div class="rrow"><div class="rlab">バッジ</div><div class="rval">
         <span class="bdg b-fix">固定席</span> … 候補1〜2件は座席番号を表示、3件以上は「複数有」と表示
@@ -1331,7 +1332,6 @@ table.badges td:first-child{white-space:nowrap;}
       <div class="rrow"><div class="rlab">つまずき</div><div class="rval">
         <div class="pit"><ul>
           <li><span class="x">×</span> 同じ人の固定席を2行に分ける → <b>自動配置が実行できません</b>。<span class="o">○</span> <code>7 11</code> のように1行にまとめる</li>
-          <li><span class="x">×</span> 対象座席を全角数字 <code>７</code> で書く → <span class="o">○</span> 半角 <code>7</code>（<b>区切りのスペースは全角でも可</b>、優先フラグの数字も全角可、という違いに注意）</li>
           <li><span class="x">×</span> 禁止席・要サポートに <code>夜勤GL席</code> と書く → <span class="o">○</span> 「夜勤GL席」は固定席のみ</li>
           <li>座席9番を指定した場合は配置されますが、確認メッセージが出ます（<a href="#def-seat9">座席9番の扱い</a>）</li>
         </ul></div>
@@ -1465,7 +1465,6 @@ table.badges td:first-child{white-space:nowrap;}
       <div class="rrow"><div class="rlab">つまずき</div><div class="rval">
         <div class="pit"><ul>
           <li><span class="x">×</span> 同じ人の禁止席を2行に分ける → <b>自動配置が実行できません</b>。<span class="o">○</span> <code>5 9</code> のように1行にまとめる</li>
-          <li><span class="x">×</span> 全角数字 <code>５</code> → <span class="o">○</span> 半角 <code>5</code></li>
           <li>禁止席で15席すべてを塞ぐと当然どこにも座れません。実行前に矛盾として検知されます</li>
         </ul></div>
       </div></div>
@@ -1541,7 +1540,7 @@ table.badges td:first-child{white-space:nowrap;}
     <tr><td>文字コード</td><td><b>UTF-8</b>（BOM付き可）。Excelでは「名前を付けて保存」→<b>「CSV UTF-8（コンマ区切り）」</b>を選ぶ</td></tr>
     <tr><td>1行目</td><td>ヘッダー行として残す（ずれると警告。処理は<b>列の位置</b>で続行するため、並び順がずれていると別の列として読まれます）</td></tr>
     <tr><td>氏名</td><td>月間シフトCSVと<b>同じ表記</b>にそろえる（姓名の間のスペースの有無・全角半角まで一致。前後の空白のみ無視）</td></tr>
-    <tr><td>座席番号</td><td><b>半角数字</b>（1〜15）。複数はスペース区切り（半角・全角どちらも可）、<b>入力順＝優先順</b></td></tr>
+    <tr><td>座席番号</td><td>数字（1〜15）。<b>半角・全角どちらでも可</b>。複数はスペース区切り（これも半角・全角どちらも可）、<b>入力順＝優先順</b></td></tr>
     <tr><td>空行</td><td>読み飛ばされます</td></tr>
   </table>
 
@@ -1636,9 +1635,9 @@ table.badges td:first-child{white-space:nowrap;}
     <tr><td>役割「◯◯」は認識できません</td>
         <td>役割が3種類以外</td>
         <td><code>役席</code> / <code>GL</code> / <code>OP</code> のいずれかにする</td></tr>
-    <tr><td>「７」は座席番号として認識できません</td>
-        <td>座席番号が全角数字</td>
-        <td><b>半角数字</b>に直す（区切りのスペースは全角でも可）</td></tr>
+    <tr><td>「◯◯」は座席番号として認識できません</td>
+        <td>座席番号に数字以外が混じっている（<code>7番</code> など）</td>
+        <td>数字だけを書く（<code>7</code>。全角 <code>７</code> も可）</td></tr>
     <tr><td>「夜勤GL席」は固定席でのみ指定できます</td>
         <td>禁止席・要サポートに「夜勤GL席」と書いた</td>
         <td>種別を <b>固定席</b> にする</td></tr>
@@ -1648,9 +1647,12 @@ table.badges td:first-child{white-space:nowrap;}
     <tr><td>OJT対象者「◯◯」が複数の教官に紐づいています</td>
         <td>同じ人が2人の教官の欄に書かれている</td>
         <td>担当する教官を1名に決める</td></tr>
+    <tr><td>教官名とOJT対象者に同じ氏名が指定されています</td>
+        <td><code>ojt.csv</code> の教官名とOJT対象者の欄に同じ人を書いた</td>
+        <td>どちらかを正しい氏名に直す（その行は読み飛ばされます）</td></tr>
     <tr><td>新人度合いが数値ではないため…</td>
         <td>「1年目」など数値以外</td>
-        <td>半角数字だけを書く（<code>1</code>、<code>2</code> …）</td></tr>
+        <td>数字だけを書く（<code>1</code>、<code>2</code> …。全角 <code>１</code> も可）</td></tr>
     <tr><td>種別「◯◯」は認識できません</td>
         <td><code>secret.csv</code> の種別の書き間違い</td>
         <td><code>隣接禁止</code> / <code>禁止席</code> / <code>固定席</code> / <code>要サポート</code> のいずれかにする</td></tr>

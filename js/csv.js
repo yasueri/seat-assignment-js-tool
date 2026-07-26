@@ -217,7 +217,10 @@ window.SeatTool.csv = (function () {
 
     dataRows.forEach((r, i) => {
       const name = cell(r, 0);
-      const degree = parseFloat(r[1]);
+      // 新人度合いは全角数字（１２３）でも受け付ける。〈ver0.5.3〉
+      // secret.csvの優先フラグ（normalizeDigits）と扱いをそろえたもの。
+      // 小数点も全角（．）を半角に直してから数値化する。
+      const degree = parseFloat(normalizeDigits(cell(r, 1)).replace(/．/g, '.'));
       if (!name) return;
       if (isNaN(degree)) {
         logs.push({ level: 'warn', message: `rookie.csv ${i + 2}行目: 新人度合いが数値ではないため読み飛ばしました（${name}）` });
@@ -311,8 +314,8 @@ window.SeatTool.csv = (function () {
         // 半角・全角スペースどちらでも区切りとして認める（同じ行内の重複番号は1つにまとめる）
         const tokens = seatCell.split(/[ \u3000]+/).filter(Boolean);
         const seenNumsInRow = new Set();
-        tokens.forEach(tok => {
-          if (tok === '夜勤GL席') {
+        tokens.forEach(rawTok => {
+          if (rawTok === '夜勤GL席') {
             if (kind !== 'seat_designated') {
               logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「夜勤GL席」は固定席でのみ指定できます（禁止席・要サポートには指定できません）` });
               return;
@@ -320,8 +323,11 @@ window.SeatTool.csv = (function () {
             result.push({ type: 'night_gl_designated', name });
             return;
           }
+          // 座席番号は全角数字（７）でも受け付ける。〈ver0.5.3〉優先フラグ・新人度合いと
+          // 扱いをそろえたもの。メッセージには利用者が書いたままの文字列を出す。
+          const tok = normalizeDigits(rawTok);
           if (!/^\d+$/.test(tok)) {
-            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「${tok}」は座席番号として認識できません` });
+            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「${rawTok}」は座席番号として認識できません` });
             return;
           }
           const seatNum = parseInt(tok, 10);
@@ -392,6 +398,14 @@ window.SeatTool.csv = (function () {
         logs.push({ level: 'warn', message: `${rowLabel}: OJT一人目とOJT二人目に同じ氏名（${ojt1Raw}）が指定されています。読み飛ばしました` });
         return;
       }
+      // 教官名とOJT対象者に同じ氏名が書かれている行を弾く。〈ver0.5.3で追加〉
+      // 以前はそのまま通していたため、教官とOJT一人目の同席処理で同じ1人が
+      // 座席の2枠を占め、画面にも印刷にも同じ人が2回出ていた（二重配置は
+      // ver0.4.0で廃止した扱いのため、明らかな入力ミスとして読み飛ばす）。
+      if (mentorName === ojt1Raw || mentorName === ojt2Raw) {
+        logs.push({ level: 'warn', message: `${rowLabel}: 教官名とOJT対象者に同じ氏名（${mentorName}）が指定されています。読み飛ばしました` });
+        return;
+      }
       if (seenMentors.has(mentorName)) {
         duplicateMentors.add(mentorName);
         logs.push({ level: 'error', message: `ojt.csv: 教官「${mentorName}」が複数行に記載されています。1名につき1行にまとめてください。` });
@@ -413,7 +427,7 @@ window.SeatTool.csv = (function () {
       trainees.forEach(name => {
         if (traineeOwner.has(name) && traineeOwner.get(name) !== mentorName) {
           duplicateTrainees.add(name);
-          logs.push({ level: 'error', message: `ojt.csv: OJT対象者「${name}」が複数の教官（${traineeOwner.get(name)}・${mentorName}）に紐づいています。` });
+          logs.push({ level: 'error', message: `ojt.csv: OJT対象者「${name}」が複数の教官（${traineeOwner.get(name)}・${mentorName}）に紐づいています。1名の担当教官に統一してください。` });
         }
         traineeOwner.set(name, mentorName);
       });
@@ -422,9 +436,11 @@ window.SeatTool.csv = (function () {
       const seatOrder = [];
       if (seatCell) {
         const tokens = seatCell.split(/[ \u3000]+/).filter(Boolean);
-        tokens.forEach(tok => {
+        tokens.forEach(rawTok => {
+          // secret.csvの対象座席と同じく、全角数字（７）でも受け付ける。〈ver0.5.3〉
+          const tok = normalizeDigits(rawTok);
           if (!/^\d+$/.test(tok)) {
-            logs.push({ level: 'warn', message: `${rowLabel}: 「${tok}」は座席番号として認識できません` });
+            logs.push({ level: 'warn', message: `${rowLabel}: 「${rawTok}」は座席番号として認識できません` });
             return;
           }
           const seatNum = parseInt(tok, 10);

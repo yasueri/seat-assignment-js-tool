@@ -153,6 +153,114 @@
     return s;
   }
 
+  // ---------- あふれ欄の組み立て ----------
+
+  // 人物の識別子。同日2回勤務の2件を区別するため、氏名ではなくpkey（氏名|開始時刻）で
+  // 判定する。古い保存ファイル由来などでpkeyが無い場合に備えて同じ形で補完する。
+  function personKey(p) {
+    return p.pkey || `${p.name}|${p.start}`;
+  }
+
+  // 「自動配置を実行した時点でのこの人」を指す識別子。〈ver0.5.3で追加〉
+  // ✎編集で氏名・開始時刻を変えてもこの値は変わらないため、次案・シャッフルで
+  // 座席表を作り直すときに、作り直しの元になった人物と、いま画面にあるカードとを
+  // 対応づけられる（originPkeyは✎編集の保存時にだけ付く。それ以外はpkeyと同じ）。
+  function originKey(p) { return p.originPkey || personKey(p); }
+
+  // いま画面のどこに誰がいるかを originKey で引ける形にまとめる。
+  // 値はカードの現物（✎編集後の内容を含む）と、その居場所のappStateキー。
+  function collectCurrentPeople() {
+    const map = new Map();
+    const put = (p, area) => { if (p && !map.has(originKey(p))) map.set(originKey(p), { person: p, area }); };
+    for (const s of SEATS) {
+      appState.seats[s.key].forEach(p => put(p, 'seats'));
+      appState.nightSeats[s.key].forEach(p => put(p, 'nightSeats'));
+    }
+    ['early', 'late', 'nightGL', 'nightSpare'].forEach(area => {
+      Object.keys(appState[area]).forEach(k => put(appState[area][k], area));
+    });
+    (appState.overflow || []).forEach(p => put(p, 'overflow'));
+    (appState.nightOverflow || []).forEach(p => put(p, 'nightOverflow'));
+    return map;
+  }
+
+  // 作り直した座席表・あふれ欄に入っている1人分を、いまの画面の状態に合わせる。
+  // 〈ver0.5.3で追加〉座席表の作り直しは「自動配置を実行した時点の人物一覧」
+  // （ex.context.people）から行うため、そのままでは次の3つのずれが起きる。
+  //   ・✎削除した人が復活する
+  //   ・早番・遅番エリアや夜勤側へ手で移した人が、座席にも現れて二重表示になる
+  //   ・✎編集で直した氏名・時刻が、編集前の内容に戻る
+  // いま画面にいなければ削除された人、作り直さないエリアにいれば移された人として
+  // 取り除き、残る人は画面にある最新のカードで置き換える。
+  function reconcileRebuilt(person, current, seatsKey, overflowKey) {
+    if (!person) return null;
+    const cur = current.get(originKey(person));
+    if (!cur) return null;                                              // 画面から消えている＝✎削除された
+    if (cur.area !== seatsKey && cur.area !== overflowKey) return null; // 別のエリアへ手で移されている
+    return cur.person;                                                  // ✎編集後の最新の内容を使う
+  }
+
+  // 作り直した座席表（15席×2枠）を、上のreconcileRebuiltで1枠ずつ調整する。
+  function reconcileRebuiltState(newState, current, seatsKey, overflowKey) {
+    const out = {};
+    for (const s of SEATS) {
+      out[s.key] = (newState[s.key] || [null, null])
+        .map(p => reconcileRebuilt(p, current, seatsKey, overflowKey));
+    }
+    return out;
+  }
+
+  // 「次案を表示」「候補1に戻す」「一部シャッフル」で座席表を作り直すときの、
+  // あふれ欄の組み立て。〈ver0.5.2で追加〉
+  //
+  // 座席1〜15の計算対象は日勤＝OPのみ、夜勤＝OP＋座席側に回った役席・GLのみで、
+  // 早番・遅番エリアや夜勤GL枠の人は含まれていない。そのため座席側の計算結果
+  // （reshuffled.overflow）だけであふれ欄を上書きすると、計算に渡していない人が
+  // 画面のどこにも残らず、その日の配置から抜け落ちる。
+  // そこで、いまあふれ欄と座席1〜15にいる人のうち、座席計算の対象
+  // （ex.context.people）に含まれない人を拾って引き継ぐ。
+  // ・早番・遅番エリア・夜勤GL枠・予備枠は走査しない。これらの枠は作り直されず
+  //   画面に残るため、拾うとあふれ欄と二重に表示されてしまう。
+  // ・座席1〜15にいる人は走査する。座席表そのものが作り直されて席から消えるため、
+  //   座席計算の対象外であればあふれ欄へ戻すのが正しい動作。
+  // ・日勤側の操作では夜勤側（およびその逆）は走査しない。反対側の枠はそのまま
+  //   画面に残るため、拾う必要がない。
+  //
+  // ※ appState[seatsKey] を新しい座席表で差し替える前に呼ぶこと
+  //    （差し替え後だと、引き継ぐべき人が座席表から消えている）。
+  function rebuildOverflowList(ex, seatOverflow, seatsKey, overflowKey, current) {
+    const context = ex && ex.context;
+    const people = context && Array.isArray(context.people) ? context.people : null;
+    // 座席計算の対象者そのものが取れない場合は、座席にいる全員が「対象外」と判定されて
+    // あふれ欄へ流れ込んでしまうため、引き継ぎを行わない（従来どおりの動作にする）。
+    // 〈ver0.5.3〉ここは「取れない（null）」と「0名（空の配列）」を区別すること。
+    // その日の夜勤が0名という状況は普通に起こりえて、そのとき夜勤座席にいるのは
+    // 手で置いた人だけになる。0名を取れない扱いにすると、その人たちを引き継がないまま
+    // 座席表が空で作り直され、画面から消えてしまう。
+    if (!people) return (seatOverflow || []).filter(Boolean);
+    const seatPeople = new Set(people.map(personKey));
+
+    // 座席側の計算であふれた人も、削除・移動・✎編集を反映させてから並べる〈ver0.5.3〉
+    const merged = (seatOverflow || [])
+      .map(p => reconcileRebuilt(p, current, seatsKey, overflowKey))
+      .filter(Boolean);
+    const seen = new Set(merged.map(originKey));
+    const candidates = (appState[overflowKey] || []).filter(Boolean);
+    for (const s of SEATS) {
+      for (let i = 0; i < 2; i++) {
+        const p = appState[seatsKey][s.key][i];
+        if (p) candidates.push(p);
+      }
+    }
+    for (const p of candidates) {
+      const k = originKey(p);
+      if (seatPeople.has(k) || seen.has(k)) continue;
+      seen.add(k);
+      merged.push(p);
+    }
+    return merged;
+  }
+
   // ---------- ファイル読み込み ----------
   const fileStatusEls = {
     shift: document.getElementById('status-shift'),
@@ -221,6 +329,12 @@
     const ojtParsed = parseOjtRows(rawText.ojt, seatByNumber);
     appState.ojtRows = ojtParsed.rows;
     appState.ojtIndexes = buildOjtIndexes(ojtParsed.rows);
+    // secret.csvと同様、全探索backtrackの候補は旧ojt.csvの内容で計算済みのため無効化する。
+    // 〈ver0.5.2〉候補を残したままだと、「次案を表示」「一部シャッフル」が自動配置を
+    // 実行した時点の人物データから座席表を作り直すため、いま付け直したバッジが
+    // 読み込み前の内容に戻ってしまう。
+    appState.dayExhaustive = null;
+    appState.nightExhaustive = null;
     reapplyBadges();
     render();
     renderMessages([
@@ -235,6 +349,9 @@
     const rookieParsed = parseRookieRows(rawText.rookie);
     appState.rookieRows = rookieParsed.rows;
     appState.rookieIndexes = buildRookieIndexes(rookieParsed.rows);
+    // ojt.csvと同じ理由で候補を無効化する〈ver0.5.2〉
+    appState.dayExhaustive = null;
+    appState.nightExhaustive = null;
     reapplyBadges();
     render();
     renderMessages([
@@ -249,6 +366,20 @@
   function refreshShiftMonthly() {
     shiftMonthly = parseShiftMonthlyRows(rawText.shift);
     populateDateSelect(shiftMonthly);
+    // 使える行が1件も無い場合、配置対象日を選べず「自動配置を実行」まで進めないため、
+    // 解析時に作られた行ごとの警告が画面に出る機会そのものが無くなってしまう。
+    // 〈ver0.5.3で追加〉原因が分かるよう、読み込んだ時点でメッセージ欄に出す。
+    // 1件でも使える行があれば、警告は従来どおり「自動配置を実行」時にまとめて表示する。
+    if (shiftMonthly.dates.length === 0) {
+      renderMessages([
+        {
+          level: 'error',
+          message: '月間シフトCSVから、配置に使える行を1件も読み取れませんでした。列の並び（日付, 氏名, 開始時刻, 終了時刻, 前残業, 後残業, 役割）と、下記の内容をご確認ください。',
+        },
+        ...shiftMonthly.logs,
+      ]);
+      scrollToMessages();
+    }
   }
 
   // 「配置対象日」セレクタを、読み込んだ月間シフトCSVの日付一覧で埋める
@@ -387,10 +518,18 @@
     const leaderRows = [];
     const nightOpRows = [];
     const nightLeaderRows = [];
-    const presentNames = new Set(dayRows.map(r => r.name));
+    // 教官を座席グリッド側（opRows）へ回すかどうかの判定に使う、
+    // 「本日、日勤の座席1〜15に並ぶ人」の氏名。
+    // 〈ver0.5.3で変更〉以前はその日出勤している全員を対象にしていたため、
+    // OJT対象者が夜勤だった場合や役席・GLだった場合にも教官が座席側へ移されていた。
+    // それらの対象者は日勤の座席1〜15に来ないため同席は成立せず、教官が
+    // 早番・遅番エリアから抜けてしまうだけだった。
+    const dayOpNames = new Set(
+      dayRows.filter(r => !r.nightShift && r.role === 'OP').map(r => r.name)
+    );
     const isMentorWithPresentTrainee = (name) => {
       if (!ojtIndexes || !ojtIndexes.traineesOf.has(name)) return false;
-      return ojtIndexes.traineesOf.get(name).some(t => presentNames.has(t));
+      return ojtIndexes.traineesOf.get(name).some(t => dayOpNames.has(t));
     };
     dayRows.forEach(r => {
       const base = {
@@ -516,10 +655,13 @@
       ...(secretParsed.duplicateDesignatedNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('固定席', name) })),
       ...(secretParsed.duplicateForbiddenNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('禁止席', name) })),
       ...(secretParsed.duplicateSupportNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('要サポート', name) })),
-      ...(ojtParsed.duplicateMentorNames || []).map(name => ({ level: 'error', message: `ojt.csv: 教官「${name}」が複数行に記載されています。1名につき1行にまとめてください。` })),
-      ...(ojtParsed.duplicateTraineeNames || []).map(name => ({ level: 'error', message: `ojt.csv: OJT対象者「${name}」が複数の教官に紐づいています。1名の担当教官に統一してください。` })),
     ];
-    if (dupMessages.length > 0) {
+    // ojt.csv側の重複（教官の重複・OJT対象者の担当重複）は、csv.jsが解析時に
+    // 同じ内容のエラーを既にlogsへ積んでいる。〈ver0.5.3〉ここで作り直すと同じ問題が
+    // 2件あるように見えるため、メッセージは作らず「配置を止めるか」の判定にだけ使う。
+    const ojtDuplicateCount = (ojtParsed.duplicateMentorNames || []).length
+      + (ojtParsed.duplicateTraineeNames || []).length;
+    if (dupMessages.length > 0 || ojtDuplicateCount > 0) {
       renderMessages([...allLogs, ...dupMessages]);
       scrollToMessages();
       return; // CSVを修正してもらうため、配置は実行しない
@@ -740,15 +882,19 @@
     return { isOjtMentor: false, isOjtTrainee: false, ojtMentorName: null, ojtTraineeNames: [] };
   }
 
-  // 指定した位置以外に、同じ氏名の人がすでにいないか確認する（手入力での重複防止）。
+  // 指定した位置以外に、同じ人がすでにいないか確認する（手入力での重複防止）。
   // 二重配置の廃止（ver0.4.0）に伴い、夜勤GL枠・予備枠も含めた全エリアでチェックする。
-  function isNameUsedElsewhere(name, loc) {
+  // 〈ver0.5.3で氏名からpkey（氏名|開始時刻）へ変更〉同日2回勤務は同じ氏名の
+  // カードが2枚並ぶ正しい状態だが、氏名だけで判定していたため、どちらのカードも
+  // ✎編集の保存時に必ず「既に使われています」となり、時刻の手直しすらできなかった。
+  // 氏名と開始時刻の両方が他のカードと一致する場合のみ重複として扱う。
+  function isPersonUsedElsewhere(pkey, loc) {
     for (const [seatType, seatState] of [['seat', appState.seats], ['nightSeat', appState.nightSeats]]) {
       for (const s of SEATS) {
         for (let i = 0; i < 2; i++) {
           if (loc.type === seatType && loc.seatKey === s.key && loc.slotIndex === i) continue;
           const p = seatState[s.key][i];
-          if (p && p.name === name) return true;
+          if (p && personKey(p) === pkey) return true;
         }
       }
     }
@@ -759,14 +905,14 @@
       for (const key of Object.keys(areaState)) {
         if (loc.type === areaType && loc.key === key) continue;
         const p = areaState[key];
-        if (p && p.name === name) return true;
+        if (p && personKey(p) === pkey) return true;
       }
     }
     for (const [ovType, ovList] of [['overflow', appState.overflow], ['nightOverflow', appState.nightOverflow]]) {
       for (let i = 0; i < ovList.length; i++) {
         if (loc.type === ovType && loc.index === i) continue;
         const p = ovList[i];
-        if (p && p.name === name) return true;
+        if (p && personKey(p) === pkey) return true;
       }
     }
     return false;
@@ -1009,10 +1155,6 @@
       const newEnd = endInput.value.trim();
 
       if (!newName) { errorDiv.textContent = '氏名を入力してください。'; return; }
-      if (isNameUsedElsewhere(newName, loc)) {
-        errorDiv.textContent = `「${newName}」は既に他の座席・あふれで使われています。`;
-        return;
-      }
       const startMin = timeToMinutes(newStart);
       const endMin = timeToMinutes(newEnd);
       if (startMin == null || endMin == null) {
@@ -1023,15 +1165,35 @@
         errorDiv.textContent = '開始時刻は終了時刻より前にしてください。';
         return;
       }
+      // 重複判定は開始時刻も使うため、時刻の形式を確かめてから行う。〈ver0.5.3〉
+      const newPkey = `${newName}|${newStart}`;
+      if (isPersonUsedElsewhere(newPkey, loc)) {
+        errorDiv.textContent = `「${newName}」（${newStart}開始）は既に他の座席・あふれで使われています。`;
+        return;
+      }
 
+      const nameUnchanged = newName === person.name;
       const updated = {
         ...person,
         name: newName, start: newStart, end: newEnd, startMin, endMin,
         // 氏名・開始時刻が変わりうるため、識別子も作り直す。〈ver0.4.18〉
-        pkey: `${newName}|${newStart}`,
-        ...deriveBadgeFields(newName),
+        pkey: newPkey,
+        // 自動配置を実行した時点での識別子は、氏名を変えても保持する。〈ver0.5.3〉
+        // 「次案を表示」「一部シャッフル」で座席表を作り直すときに、作り直しの元に
+        // なった人物とこのカードとを対応づけるために使う（reconcileRebuilt参照）。
+        originPkey: person.originPkey || person.pkey || `${person.name}|${person.start}`,
+        // 氏名を変えていない場合は、変更前の人物を existing として渡す。〈ver0.5.3〉
+        // ojt.csv / rookie.csv が未読み込みのとき（保存ファイルだけを開いた場合など）、
+        // existing を渡さないと教官・OJT・新人のバッジを維持する手段が無く、
+        // 時刻だけを直したつもりでバッジが消えていた。
+        // 氏名を変えた場合は、前の人の情報を引き継がないよう existing は渡さない。
+        ...deriveBadgeFields(newName, nameUnchanged ? person : undefined),
       };
       setPersonAt(loc, updated);
+      // 新人の順位（新人1〜7）は「その日配置されている人の中での順」で決まるため、
+      // 氏名の変更で対象者が入れ替わった場合に備えて付け直す。〈ver0.5.3〉
+      // rookie.csvが未読み込みのときは何もしない（保存データの順位を維持する）。
+      reapplyRookieRanks();
       editingLoc = null;
       render();
     }
@@ -1338,8 +1500,12 @@
       const prevState = appState[seatsKey];
       ex.index = index;
       const reshuffled = reshuffleForbiddenAndOthers(ex.solutions[index], ex.context);
-      appState[seatsKey] = reshuffled.state;
-      appState[overflowKey] = reshuffled.overflow;
+      // 座席表を差し替える前に、いまの画面の状態（削除・移動・✎編集）を集めておく
+      const current = collectCurrentPeople();
+      const nextState = reconcileRebuiltState(reshuffled.state, current, seatsKey, overflowKey);
+      const nextOverflow = rebuildOverflowList(ex, reshuffled.overflow, seatsKey, overflowKey, current);
+      appState[seatsKey] = nextState;
+      appState[overflowKey] = nextOverflow;
       editingLoc = null;
       const changed = diffChangedNames(prevState, reshuffled.state);
       if (prefix === 'day') render(changed, undefined);
@@ -1371,8 +1537,12 @@
       const base = ex.solutions[ex.index];
       const prevState = appState[seatsKey];
       const reshuffled = reshuffleForbiddenAndOthers(base, ex.context);
-      appState[seatsKey] = reshuffled.state;
-      appState[overflowKey] = reshuffled.overflow;
+      // applyCandidateと同様、座席表の差し替え前に現在の状態を集めて調整する
+      const current = collectCurrentPeople();
+      const nextState = reconcileRebuiltState(reshuffled.state, current, seatsKey, overflowKey);
+      const nextOverflow = rebuildOverflowList(ex, reshuffled.overflow, seatsKey, overflowKey, current);
+      appState[seatsKey] = nextState;
+      appState[overflowKey] = nextOverflow;
       editingLoc = null;
       const changed = diffChangedNames(prevState, reshuffled.state);
       if (prefix === 'day') render(changed, undefined);
