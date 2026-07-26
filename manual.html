@@ -454,7 +454,11 @@ table.badges td:first-child{white-space:nowrap;}
             <li><a href="#step-8">⑧印刷／⑨保存・復元</a></li>
           </ul>
         </li>
-        <li><a href="#sec-screen">画面の見かた</a></li>
+        <li><a href="#sec-screen">画面の見かた</a>
+          <ul>
+            <li><a href="#sec-badge-hide">出勤状況で消えるバッジ</a></li>
+          </ul>
+        </li>
         <li><a href="#sec-adjust">配置を調整する</a>
           <ul>
             <li><a href="#sec-candidates">候補欄とラベルの読みかた</a></li>
@@ -777,21 +781,44 @@ table.badges td:first-child{white-space:nowrap;}
         <td>禁止席の対象者。表示ルールは固定席と同じ</td>
         <td><a href="#r-ban">禁止席</a></td></tr>
     <tr><td><span class="bdg b-adjacent">隣禁止 A</span></td>
-        <td>ペア（<code>secret.csv</code> の行）ごとにA・B・C…。自分が属するペアの記号をすべて表示（2ペアなら「AB」、4ペア以上は「4以上」）。<b>同じ記号の人同士が相手</b></td>
+        <td>ペア（<code>secret.csv</code> の行）ごとにA・B・C…。自分が属するペアの記号をすべて表示（2ペアなら「AB」、4ペア以上は「4以上」）。<b>同じ記号の人同士が相手</b><br><b>相手が本日出勤していないペアの記号は表示されません</b>（→ <a href="#sec-badge-hide">出勤状況で消えるバッジ</a>）</td>
         <td><a href="#r-adj">隣接禁止</a></td></tr>
-    <tr><td><span class="bdg b-mentor">教官</span> / <span class="bdg b-mentor">OJT</span></td>
-        <td><code>ojt.csv</code> 記載者</td>
-        <td><a href="#r-ojt">教官・OJT</a></td></tr>
     <tr><td><span class="bdg b-fix">夜勤GL席</span></td>
         <td>「夜勤GL席」指定だが枠に選ばれず座席1〜15に配置された人（夜勤のみ）</td>
         <td><a href="#r-fix">固定席</a></td></tr>
+    <tr><td><span class="bdg b-mentor">教官 A</span> / <span class="bdg b-mentor">OJT A</span></td>
+        <td><code>ojt.csv</code> 記載者。記号は <code>ojt.csv</code> の<b>行ごと</b>にA・B・C…（1行目＝A）<br><b>OJT対象者が本日1名も出勤していない日は「教官」バッジを表示しません</b>（→ <a href="#sec-badge-hide">出勤状況で消えるバッジ</a>）</td>
+        <td><a href="#r-ojt">教官・OJT</a></td></tr>
     <tr><td><b style="color:#B8860B">7:30※</b></td>
         <td>時刻が黄色＋※ … その時刻は残業（前残業／後残業）</td>
         <td><a href="#sec-csv-shift">月間シフトCSV</a></td></tr>
   </table>
 
   <div class="callout">
-    <p><b>バッジはカードの上から、優先 → 新人 → 固定席 → 要サポ → 禁止席 → 隣禁止 → 夜勤GL席の順に並びます。</b>優先フラグは <span class="bdg b-prio">優先</span> バッジで表示されますが、<b>数値（1・2…）は画面に出ません</b>。誰を何番にしたかは <code>secret.csv</code> 側で管理してください。</p>
+    <p><b>バッジはカードの上から、優先 → 新人 → 固定席 → 要サポ → 禁止席 → 隣禁止 → 夜勤GL席 → 教官 → OJT の順に並びます。</b>優先フラグは <span class="bdg b-prio">優先</span> バッジで表示されますが、<b>数値（1・2…）は画面に出ません</b>。誰を何番にしたかは <code>secret.csv</code> 側で管理してください。</p>
+  </div>
+
+  <h3 id="sec-badge-hide">その日の出勤状況で消えるバッジ</h3>
+  <p><span class="bdg b-adjacent">隣禁止</span> と <span class="bdg b-mentor">教官</span> の2つは、<b>その日の出勤者に合わせて自動で消えます。</b>相手がいない日にバッジだけ残っていると、不要な気づかいが生じるためです。</p>
+
+  <table>
+    <tr><th>バッジ</th><th>消える条件</th></tr>
+    <tr><td><span class="bdg b-adjacent">隣禁止</span></td>
+        <td><b>ペアの相手が本日出勤していないとき。</b>判定は<b>ペア単位</b>で、相手が出勤しているペアの記号だけが残ります<br>
+          <span class="note">例：AとBを持つ人で、Aの相手が休み・Bの相手が出勤 → <span class="bdg b-adjacent">隣禁止 B</span>。両方休みならバッジごと消えます</span></td></tr>
+    <tr><td><span class="bdg b-mentor">教官</span></td>
+        <td><b>OJT対象者が本日1名も出勤していないとき。</b>その側の「教官」バッジが全員分消えます<br>
+          <span class="note">1名でも出勤していれば、担当者がいない教官のバッジも残ります（担当教官が休みのとき、その教官が振替先になり得るため）</span></td></tr>
+  </table>
+
+  <div class="callout">
+    <ul style="margin:0">
+      <li><b>消したときは必ずメッセージ欄でお知らせします</b> → <a href="#sec-messages">12. メッセージ一覧と対処</a></li>
+      <li>判定は<b>「その日出勤しているか」だけ</b>を見ます。座席表のどこにいるか、カードを手で動かしたかは関係ありません</li>
+      <li><b>日勤と夜勤は別々に判定します</b>（座席表が別で、日勤の人と夜勤の人が隣り合うことはないため）。早番・遅番へ回った役席・GLも出勤者に数えます</li>
+      <li>自動配置も保存データの読み込みもまだの状態では、出し分けを行わず全部表示します</li>
+      <li><span class="bdg b-mentor">OJT</span> バッジと、<code>rookie.csv</code> の <span class="bdg b-rookie">新人</span> バッジは消えません。OJT対象者かどうかの判定に「新人」は関係ありません</li>
+    </ul>
   </div>
 </section>
 <section id="sec-adjust">
@@ -973,7 +1000,7 @@ table.badges td:first-child{white-space:nowrap;}
         <tr>
           <td>教官・OJTのバッジ（<code>ojt.csv</code>）</td>
           <td class="ok">○</td>
-          <td>バッジも復元されます<br><span class="note"><code>ojt.csv</code> を読み込んでいる場合は、そちらの内容で付け直します</span></td>
+          <td>バッジも復元されます<br><span class="note">A・Bの記号も保存されるため、<code>ojt.csv</code> を読み込み直さなくても維持されます。<code>ojt.csv</code> を読み込んでいる場合は、そちらの内容で付け直します</span></td>
         </tr>
         <tr class="ngrow">
           <td>固定席・禁止席・要サポート・隣禁止・優先・夜勤GL席のバッジ（<code>secret.csv</code>）</td>
@@ -1197,7 +1224,13 @@ table.badges td:first-child{white-space:nowrap;}
         </ul>
       </div></div>
       <div class="rrow"><div class="rlab">バッジ</div><div class="rval">
-        <span class="bdg b-mentor">教官</span> / <span class="bdg b-mentor">OJT</span>
+        <p><span class="bdg b-mentor">教官 A</span> / <span class="bdg b-mentor">OJT A</span> … 2行目の記号は <code>ojt.csv</code> の<b>行ごと</b>にA・B・C…（1行目＝A、2行目＝B）。その行の教官とOJT対象者全員に、同じ記号が付きます。</p>
+        <div class="callout warn">
+          <p><b>記号は「<code>ojt.csv</code> に書かれた本来の組み合わせ」です。当日の実際のペアではありません。</b></p>
+          <p style="margin-bottom:0">担当教官が休みで他の教官へ振り替わった日は、同じ席に <span class="bdg b-mentor">教官 B</span> と <span class="bdg b-mentor">OJT A</span> が並びます。<b>不具合ではありません。</b>その日の組み合わせは、記号ではなく<b>同じ席にいるかどうか</b>で判断してください。</p>
+        </div>
+        <p><b>OJT対象者が本日1名も出勤していない日は、「教官」バッジを全員分表示しません</b>（メッセージが出ます）。1名でも出勤していれば、担当者がいない教官のバッジも残します。→ <a href="#sec-badge-hide">2章 出勤状況で消えるバッジ</a></p>
+        <p class="note">この判定の対象は <code>ojt.csv</code> のOJT一人目・二人目に書かれた人だけです。<code>rookie.csv</code> の「新人」は関係ありません。</p>
       </div></div>
       <div class="rrow"><div class="rlab">配置のされかた</div><div class="rval">
         <p><b>教官1名＋OJT1名</b>のとき、対象座席を指定しなければ次の順に空席を探し、最初に見つかった座席へ2人まとめて同席します。</p>
@@ -1410,6 +1443,8 @@ table.badges td:first-child{white-space:nowrap;}
       <div class="rrow"><div class="rlab">バッジ</div><div class="rval">
         <p><span class="bdg b-adjacent">隣禁止 A</span> … ペア（<code>secret.csv</code> の行）ごとにA・B・C…と記号が振られます。<b>同じ記号の人同士が相手</b>です。</p>
         <p>自分が属するペアの記号を<b>すべて</b>表示するので、上の例の山田太郎には <span class="bdg b-adjacent">隣禁止 AB</span> のように2文字表示されます。4ペア以上に属する人は <span class="bdg b-adjacent">隣禁止 4以上</span> と表示されます。</p>
+        <p><b>相手が本日出勤していないペアの記号は表示されません。</b>上の例で佐藤花子が休みなら、山田太郎は <span class="bdg b-adjacent">隣禁止 B</span> だけになります。相手が2人とも休みなら、バッジ自体が付きません（どちらの場合もメッセージが出ます）。→ <a href="#sec-badge-hide">2章 出勤状況で消えるバッジ</a></p>
+        <p class="note">配置ルールそのものは変わりません。相手が出勤している日は、これまでどおり必ず隣り合わない配置になります。</p>
       </div></div>
       <div class="rrow"><div class="rlab">配置のされかた</div><div class="rval">
         <p>枝刈り付きの<b>全探索（backtrack）</b>で「全員置ける組み合わせ」を探し、次の基準で良い案を自動採用します。</p>
@@ -1618,8 +1653,8 @@ table.badges td:first-child{white-space:nowrap;}
         <td>Excelで普通の「CSV」形式で保存した</td>
         <td>「名前を付けて保存」→<b>「CSV UTF-8（コンマ区切り）」</b>を選ぶ</td></tr>
     <tr><td><b>その人だけバッジが付かない</b><br>／指定が効いていない</td>
-        <td>氏名が月間シフトCSVと不一致<br><b>（最も多い原因）</b></td>
-        <td>姓名の間のスペースの有無・全角半角までそろえる。月間シフトCSVからコピー＆貼り付けが確実</td></tr>
+        <td>氏名が月間シフトCSVと不一致<br><b>（最も多い原因）</b><br><span class="note">ただし <span class="bdg b-adjacent">隣禁止</span> <span class="bdg b-mentor">教官</span> の2つは、出勤状況によって意図的に消える場合があります</span></td>
+        <td>姓名の間のスペースの有無・全角半角までそろえる。月間シフトCSVからコピー＆貼り付けが確実<br><span class="note">メッセージ欄に非表示のお知らせが出ていれば正常です（<a href="#sec-badge-hide">2章</a>）</span></td></tr>
     <tr><td>ヘッダー行が想定と異なります</td>
         <td>1行目の列名や並び順が違う</td>
         <td><a href="#sec-csv-table">早見表</a>の列の順番どおりに直す</td></tr>
@@ -1678,12 +1713,30 @@ table.badges td:first-child{white-space:nowrap;}
     <tr><td>○月○日の「△△さん」が2回出勤として登録されています</td>
         <td>同日2回勤務（応援勤務）として<b>両方とも受け入れました</b>。意図した勤務ならそのままで問題ありません。<b>心当たりがなければ</b>、その日のその人の行が二重に入力されていないか月間シフトCSVを確認し、不要な行を削除して読み込み直してください（<a href="#sec-csv-shift">11章</a>）</td></tr>
   </table>
+
+  <h3>バッジの表示に関するメッセージ</h3>
+  <p>いずれも<b>お知らせです。対処は不要です。</b>詳しくは <a href="#sec-badge-hide">2章 出勤状況で消えるバッジ</a> を参照してください。</p>
+  <table>
+    <tr><th>メッセージ</th><th>意味</th></tr>
+    <tr><td>【日勤／夜勤】○○さんの隣接禁止の相手（△△さん）が本日出勤していないため、「隣禁止」バッジを表示していません</td>
+        <td>相手が全員休みのため、バッジ自体を消しました</td></tr>
+    <tr><td>【日勤／夜勤】○○さんの隣接禁止のうち、記号Aの相手（△△さん）が本日出勤していないため、「隣禁止」バッジは記号Bのみの表示にしています</td>
+        <td>複数ペアを持つ人で、休んでいる相手のぶんだけ記号を消しました</td></tr>
+    <tr><td>【日勤／夜勤】OJT対象者が本日1名も出勤していないため、教官（○○さん）の「教官」バッジを表示していません</td>
+        <td>その側にOJT対象者が1名もいないため、教官バッジを消しました</td></tr>
+  </table>
 </section>
 
 <section id="sec-faq">
   <h2>13. よくある質問 <span class="back"><a href="#toc">▲ 目次</a></span></h2>
 
   <dl class="terms">
+    <dt>Q. 同じ席にいる教官とOJTで、バッジの記号が違います（<span class="bdg b-mentor">教官 B</span> と <span class="bdg b-mentor">OJT A</span>）</dt>
+    <dd><b>不具合ではありません。</b>記号は <code>ojt.csv</code> に書かれた<b>本来の組み合わせ</b>を表すもので、当日の実際のペアではありません。担当教官が休みの日は他の教官へ自動で振り替わるため、記号が食い違います。その日の組み合わせは<b>同じ席にいるかどうか</b>で判断してください（<a href="#r-ojt">7章 教官・OJT</a>）。</dd>
+
+    <dt>Q. いつもは付いている「隣禁止」「教官」のバッジが今日は出ません</dt>
+    <dd>相手が出勤していない日は自動で消えます。メッセージ欄にお知らせが出ていれば正常です（<a href="#sec-badge-hide">2章 出勤状況で消えるバッジ</a>）。お知らせが出ていない場合は氏名の不一致を疑ってください（<a href="#sec-messages">12章</a>）。</dd>
+
     <dt>Q. バッジが付いているのに、指定と違う席にいます</dt>
     <dd>指定席が先に埋まっていた可能性があります。メッセージ欄に理由が出ているはずです。<a href="#sec-order">配置の順番</a>で自分より先のルールを持つ人が同じ席を取ると、後のルールの人は次の候補に回ります。</dd>
 
