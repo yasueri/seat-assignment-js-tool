@@ -80,13 +80,13 @@
     // 隣接禁止のペア単位の情報（氏名 -> [{ letter, partner }, …]）。〈ver0.5.4で追加〉
     // 「相手が本日出勤しているペアの記号だけ残す」判定に使う。
     adjacentPairs: null,
-    // その日出勤している人の氏名（日勤側／夜勤側で別々に持つ）。〈ver0.5.4で追加〉
+    // その日のシフト上の出勤者の氏名（日勤側／夜勤側で別々に持つ）。〈ver0.5.4で追加〉
     // 隣接禁止バッジ・教官バッジの出し分けに使う。日勤の座席表と夜勤の座席表は
     // 完全に別物で、日勤の人と夜勤の人が隣り合ったり同席したりすることはないため、
     // 判定も必ず同じ側の中だけで行う。
     // nullのとき（自動配置も保存データ読み込みもまだの状態）は出し分けを行わない
     // ＝従来どおり全部表示する。
-    dayPresentNames: null, nightPresentNames: null,
+    dayRosterNames: null, nightRosterNames: null,
     currentDateLabel: null, currentDate: null,
     // secret.csvのパース結果（保存ファイルへの書き出しと、読み込み時の
     // ruleIndexes / adjacentGroupLetters の再構築に使う）
@@ -777,8 +777,8 @@
     // 隣接禁止バッジ・教官バッジの出し分けに使う「その日の出勤者」を、日勤側・
     // 夜勤側それぞれで確定させる。〈ver0.5.4で追加〉座席に並ぶ人だけでなく、
     // 早番・遅番エリアへ回った役席・GLも出勤者として数える。
-    appState.dayPresentNames = new Set([...opRows, ...leaderRows].map(r => r.name));
-    appState.nightPresentNames = new Set([...nightOpRows, ...nightLeaderRows].map(r => r.name));
+    appState.dayRosterNames = new Set([...opRows, ...leaderRows].map(r => r.name));
+    appState.nightRosterNames = new Set([...nightOpRows, ...nightLeaderRows].map(r => r.name));
     appState.secretRows = secretParsed.rows;
     appState.ojtRows = ojtParsed.rows;
     appState.ojtIndexes = ojtIndexes;
@@ -928,9 +928,27 @@
     return !!loc && typeof loc.type === 'string' && loc.type.indexOf('night') === 0;
   }
 
-  // その側の出勤者の氏名の集合。未確定（自動配置も保存データ読み込みもまだ）なら null。
+  // その側の「出勤している人」の氏名の集合。未確定（自動配置も保存データ読み込みも
+  // まだ）なら null。
+  //
+  // シフト上の出勤者（dayRosterNames / nightRosterNames）に加えて、いま盤面に
+  // 並んでいる人も出勤者として数える。〈ver0.5.4〉✎の氏名編集で、シフトには
+  // 載っていない人をカードに書き入れた場合、シフトだけで判定するとペアの片側
+  // （書き入れた人）だけバッジが出て、もう片側は出ないという食い違いが起きるため。
+  // 盤面から拾うのは「加える」方向だけなので、カードを動かしてもバッジが消えることはない。
+  let presenceCache = null;
+  function invalidatePresenceCache() { presenceCache = null; }
   function presentNamesFor(isNightSide) {
-    return isNightSide ? appState.nightPresentNames : appState.dayPresentNames;
+    const roster = isNightSide ? appState.nightRosterNames : appState.dayRosterNames;
+    if (!roster) return null;
+    if (!presenceCache) {
+      const board = collectPresentNamesFromBoard();
+      presenceCache = {
+        day: new Set([...(appState.dayRosterNames || []), ...board.day]),
+        night: new Set([...(appState.nightRosterNames || []), ...board.night]),
+      };
+    }
+    return isNightSide ? presenceCache.night : presenceCache.day;
   }
 
   // 座席表に並んでいる人から出勤者を拾う（保存データを読み込んだときに使う。
@@ -1015,6 +1033,7 @@
   // 「自動配置を実行」「保存データの読み込み」「secret.csv / ojt.csvの読み込み」の
   // タイミングで呼ぶ。
   function buildBadgeVisibilityLogs() {
+    invalidatePresenceCache();
     const logs = [];
     [['日勤', false], ['夜勤', true]].forEach(([sideLabel, isNightSide]) => {
       if (!presentNamesFor(isNightSide)) return;
@@ -1570,6 +1589,8 @@
   // カードに一瞬ハイライトを付ける（ドラッグ操作や✎編集など、それ以外からの
   // render()呼び出しでは何も渡さないため、ハイライトは付かない）。
   function render(dayChangedNames, nightChangedNames) {
+    // バッジの出し分けは盤面の顔ぶれも見るため、描画のたびに作り直す
+    invalidatePresenceCache();
     renderDateHeadings();
     renderLeaderGrid(els.earlyGrid, 'early');
     renderLeaderGrid(els.lateGrid, 'late');
@@ -2278,8 +2299,8 @@
     // 〈ver0.5.4で追加〉保存ファイルには月間シフトCSVが含まれないため、
     // 復元した画面に並んでいる人＝その日の出勤者とみなす。
     const present = collectPresentNamesFromBoard();
-    appState.dayPresentNames = present.day;
-    appState.nightPresentNames = present.night;
+    appState.dayRosterNames = present.day;
+    appState.nightRosterNames = present.night;
     reapplyBadges();
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
     appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
