@@ -675,8 +675,25 @@
     // 2件あるように見えるため、メッセージは作らず「配置を止めるか」の判定にだけ使う。
     const ojtDuplicateCount = (ojtParsed.duplicateMentorNames || []).length
       + (ojtParsed.duplicateTraineeNames || []).length;
-    if (dupMessages.length > 0 || ojtDuplicateCount > 0) {
-      renderMessages([...allLogs, ...dupMessages]);
+
+    // 早番・遅番エリア／夜勤GL枠へ回る役席・GLが rookie.csv に載っている場合は、
+    // 設定ミスとみなして配置を実行しない。〈ver0.5.6で追加〉
+    // これらの枠は経験を積んだ役席・GL専用で、新人が入ることはない。また新人固定席は
+    // 座席1〜15のルールのため枠側には効かず、そのまま実行しても指定が無視されるだけで
+    // 気づけない。その日のシフト上の役割（役席・GL）で判定するため、同じ人でも
+    // OPとして出勤する日は対象外になる。
+    // 教官として座席側へ回る役席・GL（splitDayRowsの分岐）は座席1〜15に並ぶため対象外。
+    const rookieNameSet = new Set((rookieParsed.rows || []).map(r => r.name));
+    const leaderRookieNames = [...new Set(
+      [...leaderRows, ...nightLeaderRows].map(r => r.name).filter(name => rookieNameSet.has(name))
+    )];
+    const leaderRookieMessages = leaderRookieNames.map(name => ({
+      level: 'error',
+      message: `rookie.csv: 「${name}」さんはこの日、役席・GLとして出勤するため、新人として指定できません（早番・遅番エリア／夜勤GL枠に配置されるスタッフです）。rookie.csvから該当行を削除するか、月間シフトCSVの役割をご確認ください。`,
+    }));
+
+    if (dupMessages.length > 0 || ojtDuplicateCount > 0 || leaderRookieMessages.length > 0) {
+      renderMessages([...allLogs, ...dupMessages, ...leaderRookieMessages]);
       scrollToMessages();
       return; // CSVを修正してもらうため、配置は実行しない
     }
@@ -733,7 +750,8 @@
     }
     // 3) 新人固定席 ＞ 教官・OJT ＞ 固定席（座席10のリーダー含む）＞ 時刻順 で配置。
     //    nightContext:true により、同列隣接をソフトに回避する（固定席で結果的に
-    //    隣接するのは許容）。座席側に回った「夜勤GL席」指定者にはバッジが付く。
+    //    隣接するのは許容）。「夜勤GL席」指定者にはバッジが付く（枠に選ばれたか
+    //    どうかは問わない。〈ver0.5.6で変更〉）。
     //    夜勤は教官・OJTの役席・GL振り替え（splitDayRows側の分岐）は行わないが、
     //    OP同士の教官・OJTペア自体はここでも同じロジックが動く（実害はない前提）。
     //    隣接禁止対象者の配置は日勤と同様、まず全探索backtrackを試し、
@@ -784,6 +802,14 @@
     appState.ojtIndexes = ojtIndexes;
     appState.rookieRows = rookieParsed.rows;
     appState.rookieIndexes = buildRookieIndexes(rookieParsed.rows);
+    // 早番・遅番エリア／夜勤GL枠に回った役席・GLにもバッジ情報を付ける。〈ver0.5.6で追加〉
+    // 枠にいる間はバッジを表示しないが、手動で座席へ動かした時点で表示できるようにする。
+    // 上のappState.ruleIndexes / ojtIndexes / rookieIndexes を使うため、必ずその後に呼ぶこと。
+    reapplyLeaderBadges();
+    // 6名を超えてあふれ欄へ回った役席・GL（leaderResult.overflow）は、あふれ欄が
+    // バッジ表示エリアのため、この時点でバッジ情報が必要になる。座席側から来た人は
+    // 既に同じ内容が入っているため、付け直しても結果は変わらない。
+    appState.overflow = appState.overflow.map(p => (p ? { ...p, ...deriveBadgeFields(p.name, p) } : p));
     appState.currentDateLabel = formatDateLabel(selectedDate);
     appState.currentDate = selectedDate;
     hasRunOnce = true;
@@ -2162,8 +2188,10 @@
   // 配置済みの全カードに、現在のsecret.csvルール（appState.ruleIndexes）から
   // バッジ情報を付け直す。secret.csvが未読み込み（ruleIndexes=null）の場合は
   // バッジなしになる。対象はバッジが表示されるエリア（日勤・夜勤の座席グリッドと
-  // あふれ）のみ。「夜勤GL席」バッジは夜勤側の座席・あふれにいる対象者にのみ付け、
-  // 夜勤GL枠に入っている本人には付けない（枠に選ばれなかった人を示すバッジのため）。
+  // あふれ）と、早番・遅番エリア／夜勤GL枠・予備枠（reapplyLeaderBadges）。
+  // 「夜勤GL席」バッジは、夜勤側にいる固定席「夜勤GL席」の指定者全員に付ける
+  // （夜勤GL枠に入っている本人を含む。枠のカードにはバッジを表示しないため、
+  // 実際に見えるのは座席・あふれへ動かしたときだけ。〈ver0.5.6で変更〉）。
   function reapplyBadges() {
     const idx = appState.ruleIndexes;
     const nightGLNames = idx ? idx.nightGLDesignatedNames : new Set();
@@ -2187,7 +2215,33 @@
     }
     appState.overflow = appState.overflow.map(p => apply(p, false));
     appState.nightOverflow = appState.nightOverflow.map(p => apply(p, true));
+    reapplyLeaderBadges();
     reapplyRookieRanks();
+  }
+
+  // 早番・遅番エリア／夜勤GL枠・予備枠にいる役席・GLにも、バッジ情報を持たせる。
+  // 〈ver0.5.6で追加〉これらの枠のカード自体にはバッジを表示しない（createLeaderCard参照）が、
+  // 手動で座席・あふれへ動かした時点でバッジが出るようにするため。
+  // ver0.5.5までは、自動配置で最初から早番等に入った人にはバッジ情報が付いておらず、
+  // 座席へ動かしてもバッジが出なかった（座席→早番→座席と動かした人だけ出ていた）。
+  // 「夜勤GL席」バッジは、枠に選ばれたかどうかに関わらず、固定席「夜勤GL席」の
+  // 指定者であれば付ける（他のバッジと同じく「secret.csvに指定があるか」だけで決める。
+  // 〈ver0.5.6で変更〉それ以前は「枠に選ばれなかった人」を示すバッジだった）。
+  // ただし日勤側の枠（早番・遅番）では付けない（夜勤専用のバッジのため）。
+  function reapplyLeaderBadges() {
+    const idx = appState.ruleIndexes;
+    const nightGLNames = idx ? idx.nightGLDesignatedNames : new Set();
+    const apply = (p, isNightSide) => (p
+      ? { ...p, ...deriveBadgeFields(p.name, p), hasNightGLDesignation: isNightSide && nightGLNames.has(p.name) }
+      : p);
+    [[appState.early, false], [appState.late, false],
+     [appState.nightGL, true], [appState.nightSpare, true]].forEach(([state, isNightSide]) => {
+      if (!state) return;
+      LEADER_ROWS.forEach(r => LEADER_COLS.forEach(c => {
+        const k = `${r}-${c}`;
+        state[k] = apply(state[k], isNightSide);
+      }));
+    });
   }
 
   // 新人バッジの順位（新人1〜7）を、いま配置されている人を対象に付け直す。

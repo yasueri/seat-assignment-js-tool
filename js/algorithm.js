@@ -782,8 +782,9 @@ window.SeatTool.algorithm = (function () {
    *     - 空席探索時に、同列で隣接する座席を（他に選べる候補がある限り）避ける
    *       ソフトな優先度が働く（固定席などで結果的に隣接するのは許容し、
    *       メッセージも出さない）
-   *     - secret.csvで「夜勤GL席」に固定席されている人が、選ばれず座席1〜15に
-   *       配置された場合、「夜勤GL席」バッジを表示するためのフラグが付く
+   *     - secret.csvで「夜勤GL席」に固定席されている人に、「夜勤GL席」バッジを
+   *       表示するためのフラグが付く（〈ver0.5.6で変更〉それ以前は「夜勤GL枠に
+   *       選ばれず座席1〜15に回った人」を示すバッジだった）
    *   options.adjacentEscalationLevel（ver0.4.11で追加）: 隣接禁止ステップの繰り上げ段階
    *   （0〜ADJACENT_ESCALATION_MAX_LEVEL。省略時0＝従来と同じ位置）。
    *
@@ -836,7 +837,8 @@ window.SeatTool.algorithm = (function () {
       designatedSeatNumbers: (designatedSeatsMap.get(r.name) || []).map(numberOfKey),
       forbiddenSeatNumbers: (forbiddenSeatsMap.get(r.name) || []).map(numberOfKey),
       adjacentGroupLetter: adjacentGroupLetters.get(r.name) || null,
-      // 夜勤専用: 「夜勤GL席」に固定席されているが座席側に回ってきた人（バッジ表示用）
+      // 夜勤専用: 「夜勤GL席」に固定席されている人（バッジ表示用。〈ver0.5.6〉
+      // 夜勤GL枠に選ばれたかどうかは問わない）
       hasNightGLDesignation: nightContext && nightGLDesignatedNames.has(r.name),
       // 教官・OJT（ojt.csv）バッジ表示用
       isOjtMentor: ojtIndexes.isMentor.has(r.name),

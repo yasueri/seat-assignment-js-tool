@@ -801,7 +801,7 @@ table.badges col.c-ref{width:104px;}
         <td><a href="#r-adj">隣接禁止</a></td></tr>
 
     <tr><td><span class="bdg b-fix">夜勤GL席</span></td>
-        <td>夜勤GL席の候補者だったが、<br>今日は夜勤GL席に配置されなかった人（夜勤のみ）</td>
+        <td><code>secret.csv</code> で固定席「夜勤GL席」を<br>指定されている人（夜勤のみ）</td>
         <td>—</td>
         <td><a href="#r-fix">固定席</a></td></tr>
 
@@ -861,13 +861,13 @@ table.badges col.c-ref{width:104px;}
         <table class="btntbl">
           <tr><th>ボタン</th><th>動作</th></tr>
           <tr><td><b>次案を表示</b></td>
-              <td>見つかった別案（最大99件）へ<b>順に切替</b>。押すたびに、禁止席だけの対象者とその他スタッフも合わせて振り直します。最後まで行くと候補1へ戻ります<br>
+              <td>見つかった別案（最大99件）へ<b>順に切替</b>。最後まで行くと候補1へ戻ります<br>
               <span class="note">実行可能な案が1通りだけの日は押せません</span></td></tr>
           <tr><td><b>候補1に戻す</b></td>
               <td>候補1（いちばん良いと判定された案）へ<b>1クリックで戻ります</b><br>
               <span class="note">候補1を表示中は押せません</span></td></tr>
           <tr><td><b>一部シャッフル</b></td>
-              <td>隣接禁止・固定席・要サポート・教官OJT・新人固定席の座席は<b>そのまま</b>、禁止席だけの対象者とその他スタッフの座席を<b>ランダムに振り直します</b></td></tr>
+              <td>隣接禁止・固定席・要サポート・教官OJT・新人固定席の座席は<b>そのままで</b>、<br>禁止席だけの対象者とその他スタッフの座席を<b>ランダムに振り直します</b></td></tr>
         </table>
       </div></div>
       <div class="rrow"><div class="rlab">つまずき</div><div class="rval">
@@ -894,9 +894,9 @@ table.badges col.c-ref{width:104px;}
           <tr><td><b>最良グループ（○件）</b></td>
               <td>先頭の案と<b>同じ評価</b>。この中はどれを選んでも構いません</td></tr>
           <tr><td><b>同時刻入替が○件多い案</b></td>
-              <td>交代時刻がぴったり接する同席が、その件数だけ多い（<b>入れ替わりに時間がかかります</b>）</td></tr>
+              <td>交代時刻がぴったり接する同席が、○件多い</td></tr>
           <tr><td><b>指定席どおりでない方が○名</b></td>
-              <td><a href="#sec-escalation">繰り上げ</a>が起きた日に出ることがあります</td></tr>
+              <td>文字通りの意味。<a href="#sec-escalation">繰り上げ</a>が起きた日に出ることがあります</td></tr>
         </table>
         <p>劣る案も隠さずに表示しています。<b>ラベルが変わったところが境目</b>なので、行き過ぎたら「候補1に戻す」で戻れます。</p>
       </div></div>
@@ -982,10 +982,10 @@ table.badges col.c-ref{width:104px;}
         <li>自動配置を実行した<b>あとに</b> <code>secret.csv</code> を読み込んだ・読み込み直したとき</li>
         <li><b>保存した配置を読み込んだ</b>とき（<code>secret.csv</code> を読み込み直したあと）</li>
       </ul>
-      <p class="note">下の2つは、手直しをしていなくても必要です。<b>CSVや保存ファイルを読み込んでも、座席は並べ直されません。</b>読み込んだ配置ルールに違反していないかを確かめるために実行します。</p>
-      <p class="note"><b>⑦は違反を見つけるだけで、直してはくれません。</b><br>
-      ・<code>secret.csv</code> の<b>中身を直した</b>とき → ⑦より<b>④の自動配置からやり直す</b>のが確実です<br>
-      ・<b>保存した配置を読み込んだ</b>とき → ④をやり直すと読み込んだ配置が消えます。⑦でチェックし、違反があれば手で直してください</p>
+      <p class="note">上記の下2つは、手直しをしていなくても必要です。読み込んだ配置ルールに違反していないか確かめるためです。ただし、<b>⑦は違反を見つけるだけで、配置を修正してくれません。</b>次のように作業するとよいでしょう。</p>
+      <p class="note">
+      ・<code>secret.csv</code> の<b>中身を直した</b>とき → ⑦ではなく、<b>④の自動配置からやり直す</b>のが確実です<br>
+      ・<b>保存した配置を読み込んだ</b>とき → ④をやり直すと読み込んだ配置が消えます。配置を維持したい場合は⑦で違反がないかチェックしてください（違反があれば配置を修正してください）</p>
 
       <p><b>何を検出するか</b></p>
       <p>座席ルールに加え、日勤・夜勤の入れ違いや夜勤GL枠の未配置も検出します。結果は「2. メッセージ」欄に表示されます。</p>
@@ -1000,7 +1000,7 @@ table.badges col.c-ref{width:104px;}
   <div class="band" id="p4-print">
     <div class="bandhead">印刷する</div>
     <div class="bandbody">
-      <p>座席表に載せる日付を確認する画面が出ます（変更したい場合は書き換えてください）。OKを押すと印刷用ページが新しいタブで開きます。<b>1ページ目＝日勤、2ページ目＝夜勤</b>のA4各1枚で、両面コピー用のレイアウトです。</p>
+      <p>ボタンを押すと、座席表に載せる日付を確認する画面が出ます（変更したい場合は書き換えてください）。<br>OKを押すと、印刷用ページが新しいタブで開きます。<b>1ページ目＝日勤、2ページ目＝夜勤</b>のA4各1枚です。</p>
       <p class="note">プレビューを誤って閉じてしまったときは、印刷用ページ内の「この内容を印刷する」ボタンから再度印刷できます。</p>
     </div>
   </div>
@@ -1009,7 +1009,7 @@ table.badges col.c-ref{width:104px;}
   <div class="band" id="p4-save">
     <div class="bandhead">保存と読み込み<span class="btag light">必要なときだけ</span></div>
     <div class="bandbody">
-      <p>「現在の配置を保存」を押すと、手動調整・✎編集を含む<b>いま表示している配置</b>がJSONファイルとしてダウンロードされます。<br>「保存した配置を読み込む」で、そのファイルから同じ配置を復元できます。</p>
+      <p>「現在の配置を保存」を押すと、手動調整・✎編集を含む<b>、いま表示している配置</b>がJSONファイルとしてダウンロードされます。<br>「保存した配置を読み込む」で、そのファイルから同じ配置を復元できます。</p>
 
       <table class="savetbl">
         <tr><th>内容</th><th>保存</th><th>読み込み</th></tr>
@@ -1238,6 +1238,7 @@ table.badges col.c-ref{width:104px;}
       <div class="rrow"><div class="rlab">つまずき</div><div class="rval">
         <div class="pit"><ul>
           <li><span class="x">×</span> 新人度合いに <code>1年目</code> など数値以外 → 読み飛ばされます。<span class="o">○</span> 数字だけを書く（全角 <code>１</code> も可）</li>
+          <li><span class="x">×</span> その日 <b>役席・GL</b> として出勤する人を書く → <b>自動配置が実行されません</b>（早番・遅番エリア／夜勤GL枠は役席・GL専用の枠で、新人固定席は座席1〜15のルールのため効きません）</li>
           <li>同じ人を複数行書いた場合、<b>最初の行のみ</b>使われます</li>
           <li>新人に<b>優先フラグを併用</b>すると、その人は新人固定席に入りませんが、<b>上位7名の枠は1つ使います</b>。新人が7名以内の日は影響ありません</li>
           <li>OJT対象者が新人固定席の上位7名を兼ねる場合は、<b>新人固定席が優先</b>され、教官とは同席しません</li>
@@ -1256,8 +1257,8 @@ table.badges col.c-ref{width:104px;}
       <div class="rrow"><div class="rlab">書きかた</div><div class="rval">
         <table class="csv">
           <tr><th>教官名</th><th>OJT一人目</th><th>OJT二人目</th><th>対象座席</th></tr>
-          <tr><td>教官　朝三</td><td>新人　一</td><td class="empty"></td><td class="empty"></td></tr>
-          <tr><td>教官　朝八</td><td>新人　二</td><td>新人　三</td><td>12</td></tr>
+          <tr><td>教導　太郎</td><td>鈴木　一</td><td class="empty"></td><td class="empty"></td></tr>
+          <tr><td>教導　花子</td><td>佐藤　二</td><td>山田　三</td><td>12</td></tr>
         </table>
         <ul>
           <li><b>教官1名につき1行。</b>OJT一人目は必須、二人目は空欄可</li>
@@ -1322,7 +1323,7 @@ table.badges col.c-ref{width:104px;}
 
             <p class="note">対象座席で <code>15</code> を <code>12</code> より先に指定した教官だけ、順番3の「15と14」を最初に試します。</p>
 
-            <p style="margin-bottom:4px"><b>この6通りが全部ふさがっていたときだけ</b>、残りの上下となり合わせ6通りも試します（ここまで来ることは普通ありません）。</p>
+            <p style="margin-bottom:4px"><b>上記の6通りが全部ふさがっていたときだけ</b>、残りの上下隣り合わせ6通りも試します（ここまで来ることは普通ありません）。</p>
             <table class="pairtbl wide">
               <tr><th>順</th><td>7</td><td>8</td><td>9</td><td>10</td><td>11</td><td>12</td></tr>
               <tr><th>教官＋OJT一人目</th><td class="pm">12</td><td class="pm">8</td><td class="pm">11</td><td class="pm">7</td><td class="pm">6</td><td class="pm">14</td></tr>
@@ -1399,7 +1400,8 @@ table.badges col.c-ref{width:104px;}
         <ul>
           <li><code>夜勤GL席 3</code> と書くと「夜勤GL枠か3番のどちらか」という意味になります</li>
           <li>複数人が指定していれば、当日の該当者から<b>ランダムに1名</b>を選出します</li>
-          <li>選ばれなかった人は座席1〜15に配置され、<span class="bdg b-fix">夜勤GL席</span> バッジが付きます</li>
+          <li>選ばれなかった人は座席1〜15に配置されます</li>
+          <li><span class="bdg b-fix">夜勤GL席</span> バッジは、<b>枠に選ばれたかどうかに関わらず指定者全員</b>に付きます（枠のカードにはバッジを表示しないため、実際に見えるのは座席・あふれにいるときだけです）</li>
           <li>日勤には影響しません</li>
         </ul>
       </div></div>
@@ -1505,7 +1507,7 @@ table.badges col.c-ref{width:104px;}
           <tr><th>範囲</th><td>上下・左右・斜めの<b>全方向</b>（＝上の「隣接」）</td><td><b>同じ列の上下だけ</b>（例: 5と6）</td></tr>
           <tr><th>対象</th><td>指定されたペアのみ<br>日勤・夜勤とも</td><td>夜勤パネル全員</td></tr>
         </table>
-        <p class="note">夜勤でも「隣接禁止」のペアは全方向で隣り合いません。夜勤の隣接回避は、それとは別の「他に空席があるなら縦に並べない」というゆるやかな配慮で、固定席などの都合で結果的に隣り合うのは問題ありません（メッセージも出ません）。</p>
+        <p class="note">夜勤でも「隣接禁止」のペアは全方向で隣り合いません。<br>夜勤の隣接回避は、それとは別の「他に空席があるなら縦の隣席に並べない」というゆるやかな配慮で、固定席などの都合で結果的に隣り合うのは問題ありません（メッセージも出ません）。夜勤は座席数に余裕があるため、このように配置しています</p>
       </div></div>
       <div class="rrow"><div class="rlab">つまずき</div><div class="rval">
         <div class="pit"><ul>
@@ -1535,7 +1537,7 @@ table.badges col.c-ref{width:104px;}
         <span class="bdg b-lock">禁止席</span> … 表示ルールは固定席と同じ（3件以上は「複数有」）
       </div></div>
       <div class="rrow"><div class="rlab">配置のされかた</div><div class="rval">
-        <p>禁止席は<b>すべての段階で常に守られる制約</b>です。そのうえで、この「順番6」では<b>禁止席だけに載っている人</b>（隣接禁止が付いていない人）を配置します。</p>
+        <p>禁止席は<b>すべての段階で常に守られる制約</b>です。そのうえで、この「順番6」では<b>禁止席だけ設定している人を配置します。</p>
         <p>こちらも全探索で「全員置ける組み合わせ」を探し、1つ見つかった時点で確定します（隣接禁止と違い、複数案の採点・比較はしません）。見つからない場合は、候補座席が少ない人から順に空席へ配置します。</p>
       </div></div>
       <div class="rrow"><div class="rlab">つまずき</div><div class="rval">
@@ -1548,7 +1550,7 @@ table.badges col.c-ref{width:104px;}
   </div>
 
   <div class="callout">
-    <p><b>1人に複数の指定をしたいとき</b>は、<b>種別が違えば別の行にします</b>。同じ種別を2行に分けるのだけがNGです。</p>
+    <p><b>1人に複数の指定をしたいとき</b>は、<b>種別が違えば別の行にします（隣接禁止を除く）</b>。</p>
     <table class="csv">
       <tr><th>種別</th><th>対象1</th><th>対象2</th><th>対象座席</th><th>優先フラグ</th></tr>
       <tr><td>固定席</td><td>山田太郎</td><td class="empty"></td><td>7 11</td><td class="empty"></td></tr>
@@ -1657,9 +1659,9 @@ table.badges col.c-ref{width:104px;}
       </div>
 
       <details class="fold">
-        <summary>▼ 同じ人が同じ日に2回出勤する場合（応援勤務）</summary>
+        <summary>同じ人が同じ日に2回出勤する場合</summary>
         <div class="fbody">
-          <p>1人が同じ日に、間の空いた別々の時間帯で出勤することがあります。この場合、<b>時間帯が重ならなければ両方の行が受け入れられ、両方とも座席配置の対象になります</b>（確認のための警告メッセージは出ます）。</p>
+          <p>1人が同じ日に、間の空いた別々の時間帯で出勤する場合、<b>時間帯が重ならなければ両方の行が受け入れられ、両方とも座席配置の対象になります</b>（確認のための警告メッセージは出ます）。</p>
           <p>時間帯が<b>重なる</b>場合は明らかな入力ミスとみなし、あとの行を読み飛ばしてエラーを表示します。</p>
           <p class="note">2回勤務の人は <code>rookie.csv</code> / <code>secret.csv</code> / <code>ojt.csv</code> の対象外である前提の設計です。</p>
         </div>
@@ -1672,7 +1674,7 @@ table.badges col.c-ref{width:104px;}
     <tr><th>判定</th><th>条件</th></tr>
     <tr><td><b>夜勤</b></td>
         <td>開始が <b>22:00より遅い</b>、または終了が <b>26:00より遅い</b></td></tr>
-    <tr><td><b>役席・GLの遅番</b></td>
+    <tr><td><b>遅番の役席・GL</b></td>
         <td>開始が <b>12:00以降</b>、または <b>前残業TRUE かつ開始10:00以降</b></td></tr>
   </table>
   <p class="note">上記にあてはまらない役席・GLが早番エリアに入ります。どの枠が先に確定するかは <a href="#sec-order">6. 配置の順番 早見表</a> を参照してください。</p>
@@ -1684,7 +1686,7 @@ table.badges col.c-ref{width:104px;}
   <h2>12. メッセージ一覧と対処 <span class="back"><a href="#toc">▲ 目次</a></span></h2>
 
   <div class="callout">
-    <p><b>まず「2. メッセージ」欄を読んでください。</b>ほとんどの原因は行番号つきで表示されています。入力エラーがあっても自動配置は止まらないため、配置結果に反映されない行がないか、実行のたびに確認する習慣がいちばんの近道です。</p>
+    <p><b>まず「2. メッセージ」欄を読んでください。</b>ほとんどの原因は行番号つきで表示されています。入力エラーがあっても自動配置は止まらないため、配置結果に反映されない行がないか、実行のたびに確認するのが習熟の近道です。</p>
   </div>
 
   <h3>CSVが反映されないとき</h3>
@@ -1729,6 +1731,9 @@ table.badges col.c-ref{width:104px;}
     <tr><td>新人度合いが数値ではないため…</td>
         <td>「1年目」など数値以外</td>
         <td>数字だけを書く（<code>1</code>、<code>2</code> …。全角 <code>１</code> も可）</td></tr>
+    <tr><td>「◯◯」さんはこの日、役席・GLとして出勤するため、新人として指定できません</td>
+        <td>その日 <b>役席・GL</b> として出勤する人が <code>rookie.csv</code> に載っている（早番・遅番エリア／夜勤GL枠は経験を積んだ役席・GL専用の枠です）</td>
+        <td><b>自動配置は実行されません。</b><code>rookie.csv</code> から該当行を削除するか、月間シフトCSVの役割を直す</td></tr>
     <tr><td>種別「◯◯」は認識できません</td>
         <td><code>secret.csv</code> の種別の書き間違い</td>
         <td><code>隣接禁止</code> / <code>禁止席</code> / <code>固定席</code> / <code>要サポート</code> のいずれかにする</td></tr>
