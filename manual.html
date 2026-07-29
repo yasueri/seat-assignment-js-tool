@@ -816,7 +816,7 @@ table.badges col.c-ref{width:104px;}
         <td><a href="#r-ojt">教官・OJT</a></td></tr>
   </table>
 
-  <p class="note"><b style="color:#B8860B">7:30※</b> … カードの時刻が黄色＋※のときは、その時刻が残業（前残業／後残業）です。バッジではありません → <a href="#sec-csv-shift">月間シフトCSV</a></p>
+  <p class="note"><b style="color:#B8860B">7:30※</b> / <b style="color:#1B6B3A">7:30◆</b> … カードの時刻が黄色＋※のときは<b>OP残業</b>、緑色＋◆のときは<b>GL残業</b>です。バッジではありません → <a href="#sec-csv-shift">月間シフトCSV</a></p>
 
 
   <h3 id="sec-badge-hide">その日の出勤状況で消えるバッジ</h3>
@@ -1635,9 +1635,9 @@ table.badges col.c-ref{width:104px;}
     <div class="body">
       <table class="csv">
         <tr><th>日付</th><th>氏名</th><th>開始時刻</th><th>終了時刻</th><th>前残業</th><th>後残業</th><th>役割</th></tr>
-        <tr><td>2026-06-01</td><td>山田太郎</td><td>7:30</td><td>16:30</td><td>FALSE</td><td>FALSE</td><td>役席</td></tr>
-        <tr><td>2026-06-01</td><td>後藤四郎</td><td>11:00</td><td>22:00</td><td>TRUE</td><td>FALSE</td><td>OP</td></tr>
-        <tr><td>2026-06-01</td><td>佐藤花子</td><td>22:00</td><td>32:00</td><td>FALSE</td><td>FALSE</td><td>GL</td></tr>
+        <tr><td>2026-06-01</td><td>山田太郎</td><td>7:30</td><td>16:30</td><td></td><td></td><td>役席</td></tr>
+        <tr><td>2026-06-01</td><td>後藤四郎</td><td>11:00</td><td>22:00</td><td>OP</td><td></td><td>OP</td></tr>
+        <tr><td>2026-06-01</td><td>佐藤花子</td><td>22:00</td><td>32:00</td><td></td><td>GL</td><td>GL</td></tr>
       </table>
 
       <table>
@@ -1645,7 +1645,7 @@ table.badges col.c-ref{width:104px;}
         <tr><td>日付</td><td><code>YYYY-MM-DD</code> または <code>YYYY/M/D</code>（<code>2026-06-01</code> / <code>2026/6/1</code> どちらも可）。実在しない日付は読み飛ばし</td></tr>
         <tr><td>氏名</td><td>同じ日付・氏名の重複行は原則不可（下記の「同日2回勤務」を参照）</td></tr>
         <tr><td>時刻</td><td><code>HH:MM</code>。日をまたぐ夜勤の終了は<b>24時以降の延長表記</b>（例: <code>32:00</code> = 翌8:00）</td></tr>
-        <tr><td>前残業／後残業</td><td><code>TRUE</code> / <code>FALSE</code>（空欄はFALSE扱い）。TRUEの時刻はカード上で<b>黄色＋※</b>表示</td></tr>
+        <tr><td>前残業／後残業</td><td><code>OP</code>（OPとしての残業）／<code>GL</code>（GL業務での残業）／<b>空欄</b>（残業なし）。<code>OP</code>の時刻はカード上で<b>黄色＋※</b>、<code>GL</code>は<b>緑色＋◆</b>表示。印刷した紙ではマーカーが出ないことがあるため、<b>記号（※・◆）で見分けます</b></td></tr>
         <tr><td>役割</td><td><code>役席</code> / <code>GL</code> / <code>OP</code> のいずれか</td></tr>
       </table>
 
@@ -1654,6 +1654,8 @@ table.badges col.c-ref{width:104px;}
         <ul>
           <li><span class="x">×</span> 夜勤明けの終了時刻を <code>8:00</code> と書く → <span class="o">○</span> <code>32:00</code> と書く<br>
               <span class="note">（<code>8:00</code> と書くと「開始時刻が終了時刻以降」として読み飛ばされます）</span></li>
+          <li><span class="x">×</span> 前残業／後残業に <code>TRUE</code> と書く → <span class="o">○</span> <code>OP</code> または <code>GL</code> と書く<br>
+              <span class="note">（<code>TRUE</code> は当面OP残業として読み込まれますが、GL残業が黄色で出てしまいます）</span></li>
           <li><span class="x">×</span> Excelで普通の「CSV」保存（文字化けの原因）→ <span class="o">○</span> 「CSV UTF-8」で保存</li>
         </ul>
       </div>
@@ -1675,7 +1677,7 @@ table.badges col.c-ref{width:104px;}
     <tr><td><b>夜勤</b></td>
         <td>開始が <b>22:00より遅い</b>、または終了が <b>26:00より遅い</b></td></tr>
     <tr><td><b>遅番の役席・GL</b></td>
-        <td>開始が <b>12:00以降</b>、または <b>前残業TRUE かつ開始10:00以降</b></td></tr>
+        <td>開始が <b>12:00以降</b>、または <b>前残業あり（OP・GLどちらでも）かつ開始10:00以降</b></td></tr>
   </table>
   <p class="note">上記にあてはまらない役席・GLが早番エリアに入ります。どの枠が先に確定するかは <a href="#sec-order">6. 配置の順番 早見表</a> を参照してください。</p>
 </section>
