@@ -37,10 +37,24 @@ window.SeatTool.csv = (function () {
   }
 
   // ---------- 時刻処理 ----------
+  // 「9:00」「34:00」のほか、秒付きの「34:00:00」も受け付ける（秒は切り捨て）。〈ver0.5.4で追加〉
+  // Excelはcsvの24時以降の時刻を「1900/1/1 10:00」という日時として保持しており、
+  // Excelで開いて保存し直すと「34:00」が「34:00:00」に書き換わってしまうため。
+  // 利用者のPCではcsvの既定アプリがExcelになっている前提で、ツール側で吸収する。
   function timeToMinutes(str) {
-    const m = String(str).trim().match(/^(\d{1,2}):(\d{2})$/);
+    const m = String(str).trim().match(/^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/);
     if (!m) return null;
     return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  }
+
+  // 時刻の表記を「H:MM」に統一する。形式が不正な場合は null を返す。〈ver0.5.4で追加〉
+  // 時刻の文字列は画面表示のほか pkey（氏名|開始時刻）にも使われるため、
+  // 「34:00:00」「09:00」などの表記ゆれをそのまま通すと、同じ人の同じ勤務が
+  // 別人と判定されてしまう。読み込み・手入力の時点でここを通して揃える。
+  function normalizeTime(str) {
+    const min = timeToMinutes(str);
+    if (min == null) return null;
+    return `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
   }
 
   // ---------- 日付処理 ----------
@@ -82,27 +96,49 @@ window.SeatTool.csv = (function () {
     return startMin > NIGHT_START_THRESHOLD || endMin > NIGHT_END_THRESHOLD;
   }
 
-  // 遅番: 開始時刻が12:00以降、または（前残業がTRUEかつ開始時刻が10:00以降）
+  // 遅番: 開始時刻が12:00以降、または（前残業ありかつ開始時刻が10:00以降）
   // 対象は役割=役席・GLのスタッフの「早番エリア」「遅番エリア」振り分けに使用する。
   const LATE_START_THRESHOLD = timeToMinutes('12:00');      // 720
   const LATE_OT_START_THRESHOLD = timeToMinutes('10:00');   // 600
+  // frontOT は残業の種別（'' / 'OP' / 'GL'）。OP・GLどちらの残業でも「前残業あり」として
+  // 同じように扱うため、種別は見ずに「残業かどうか」だけを判定する。〈ver0.5.5〉
   function isLateShift(startMin, frontOT) {
     return startMin >= LATE_START_THRESHOLD || (!!frontOT && startMin >= LATE_OT_START_THRESHOLD);
   }
 
-  // ---------- 前残業・後残業（TRUE/FALSE） ----------
-  function parseBoolFlag(raw, name, colLabel, rowLabel, logs) {
+  // ---------- 前残業・後残業（残業の種別） ----------
+  // 〈ver0.5.5で TRUE/FALSE の2値から変更〉
+  // 残業には「OPとしての残業」と「GL業務での残業」の2種類があり、座席表で
+  // 見分けられる必要があるため、有無だけでなく種別まで持つようにした。
+  //   'OP' … OPとしての残業。画面・印刷とも 黄色マーカー＋「※」
+  //   'GL' … GL業務での残業。画面・印刷とも 緑色マーカー＋「◆」
+  //   ''   … 残業なし
+  // 戻り値を文字列にしたことで、'OP'・'GL' はどちらも真、'' は偽として評価される。
+  // そのため「残業かどうか」だけを見ている箇所（isLateShift など）は変更不要。
+  //
+  // 入力の表記ゆれは、CSVを手で直した場合に備えてここで吸収する。
+  // 旧仕様の TRUE は、実運用で大多数を占める OP残業として読み込む。
+  function parseOTKind(raw, name, colLabel, rowLabel, logs) {
     const v = String(raw == null ? '' : raw).trim().toUpperCase();
-    if (v === 'TRUE') return true;
-    if (v === 'FALSE' || v === '') return false;
-    logs.push({ level: 'warn', message: `${rowLabel}: ${colLabel}の値「${raw}」を認識できないため「FALSE」として扱いました（${name}）` });
-    return false;
+    if (v === '' || v === 'FALSE') return '';
+    if (v === 'OP' || v === 'OP残業') return 'OP';
+    if (v === 'GL' || v === 'GL残業') return 'GL';
+    if (v === 'TRUE') return 'OP';
+    logs.push({ level: 'warn', message: `${rowLabel}: ${colLabel}の値「${raw}」を認識できないため「残業なし」として扱いました（${name}）。OP・GL・空欄のいずれかで入力してください。` });
+    return '';
+  }
+
+  // 保存ファイルなど、CSV以外から来た残業種別を安全な値に丸める。
+  // 想定外の値は「残業なし」に倒す（誤った記号を紙に出さないため）。
+  function normalizeOTKind(v) {
+    return (v === 'OP' || v === 'GL') ? v : '';
   }
 
   // ---------- 月間シフトCSV ----------
   // 列: 日付,氏名,開始時刻,終了時刻,前残業,後残業,役割
   // 1か月分の全出勤情報を受け取り、日付ごとに抽出できる形で返す。
   // 役割は「役席」「GL」「OP」のいずれか。
+  // 前残業・後残業は「OP」「GL」「空欄」のいずれか（parseOTKind を参照）。
   function parseShiftMonthlyRows(text) {
     const logs = [];
     const raw = parseCSV(text);
@@ -119,8 +155,9 @@ window.SeatTool.csv = (function () {
       const rowLabel = `月間シフトCSV ${i + 2}行目`;
       const rawDate = cell(r, 0);
       const name = cell(r, 1);
-      const start = cell(r, 2);
-      const end = cell(r, 3);
+      // 表記ゆれを吸収するため、検証後に normalizeTime で書き換える。〈ver0.5.4〉
+      let start = cell(r, 2);
+      let end = cell(r, 3);
       const frontRaw = cell(r, 4);
       const backRaw = cell(r, 5);
       const role = cell(r, 6);
@@ -146,6 +183,9 @@ window.SeatTool.csv = (function () {
         logs.push({ level: 'warn', message: `${rowLabel}: 開始時刻が終了時刻以降になっているため読み飛ばしました（${name}）` });
         return;
       }
+      // ここから下（重複判定・pkey・画面表示）は「H:MM」に揃った表記だけを使う。〈ver0.5.4〉
+      start = normalizeTime(start);
+      end = normalizeTime(end);
       if (role !== '役席' && role !== 'GL' && role !== 'OP') {
         logs.push({ level: 'warn', message: `${rowLabel}: 役割「${role}」は認識できません（役席・GL・OPのいずれか）。読み飛ばしました（${name}）` });
         return;
@@ -173,8 +213,8 @@ window.SeatTool.csv = (function () {
         seenShifts.set(key, [{ start, end, startMin, endMin }]);
       }
 
-      const frontOT = parseBoolFlag(frontRaw, name, '前残業', rowLabel, logs);
-      const backOT = parseBoolFlag(backRaw, name, '後残業', rowLabel, logs);
+      const frontOT = parseOTKind(frontRaw, name, '前残業', rowLabel, logs);
+      const backOT = parseOTKind(backRaw, name, '後残業', rowLabel, logs);
 
       dateSet.add(date);
       result.push({
@@ -465,9 +505,9 @@ window.SeatTool.csv = (function () {
   }
 
   return {
-    parseCSV, timeToMinutes, normalizeDate,
+    parseCSV, timeToMinutes, normalizeTime, normalizeDate,
     parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
-    isNightShift, isLateShift,
+    isNightShift, isLateShift, normalizeOTKind,
     parseRookieRows, parseSecretRows, parseOjtRows,
   };
 })();

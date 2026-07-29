@@ -9,7 +9,8 @@
 
   const {
     parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
-    parseRookieRows, parseSecretRows, parseOjtRows, timeToMinutes, isNightShift,
+    parseRookieRows, parseSecretRows, parseOjtRows, timeToMinutes, normalizeTime, isNightShift,
+    normalizeOTKind,
   } = NS.csv;
   const {
     SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
@@ -1182,16 +1183,29 @@
     return editToggle;
   }
 
-  // 時刻1つ分の表示。残業（前残業/後残業）の場合は黄色ハイライト+「※」マークを付ける
-  function makeTimeSpan(text, isOT) {
+  // 残業の見せかた。CSVの前残業・後残業列の値（'OP' / 'GL'）に対応する。〈ver0.5.5〉
+  // マーカー（背景色）は印刷されない設定のプリンタがあるため、必ず記号を併記する。
+  // 記号は ※（線が細かい）と ◆（ベタ塗り）で形の系統を変えており、
+  // 上付きの小さな文字でも、白黒印刷した紙の上で見分けられる。
+  // 残業なし（''）の場合は null を返し、マーカーも記号も付けない。
+  function otDisplay(otKind) {
+    if (otKind === 'OP') return { cls: 'ot-op', mark: '※', label: 'OP残業' };
+    if (otKind === 'GL') return { cls: 'ot-gl', mark: '◆', label: 'GL残業' };
+    return null;
+  }
+
+  // 時刻1つ分の表示。残業（前残業/後残業）の場合はマーカー＋記号を付ける
+  // （OP残業＝黄色＋「※」／GL残業＝緑色＋「◆」。色はCSS側で指定）
+  function makeTimeSpan(text, otKind) {
     const span = document.createElement('span');
     span.textContent = text;
-    if (isOT) {
-      span.classList.add('ot-time');
-      span.title = '残業';
+    const ot = otDisplay(otKind);
+    if (ot) {
+      span.classList.add('ot-time', ot.cls);
+      span.title = ot.label;
       const mark = document.createElement('sup');
       mark.className = 'ot-mark';
-      mark.textContent = '※';
+      mark.textContent = ot.mark;
       span.appendChild(mark);
     }
     return span;
@@ -1396,17 +1410,23 @@
         errorDiv.textContent = '開始時刻は終了時刻より前にしてください。';
         return;
       }
+      // 時刻の表記を「H:MM」に揃えてから使う。〈ver0.5.4〉
+      // 「09:00」と入力されると pkey が月間シフトCSV由来の「9:00」と食い違い、
+      // 同じ人・同じ勤務なのに別人と判定されて二重配置を許してしまうため。
+      const start = normalizeTime(newStart);
+      const end = normalizeTime(newEnd);
+
       // 重複判定は開始時刻も使うため、時刻の形式を確かめてから行う。〈ver0.5.3〉
-      const newPkey = `${newName}|${newStart}`;
+      const newPkey = `${newName}|${start}`;
       if (isPersonUsedElsewhere(newPkey, loc)) {
-        errorDiv.textContent = `「${newName}」（${newStart}開始）は既に他の座席・あふれで使われています。`;
+        errorDiv.textContent = `「${newName}」（${start}開始）は既に他の座席・あふれで使われています。`;
         return;
       }
 
       const nameUnchanged = newName === person.name;
       const updated = {
         ...person,
-        name: newName, start: newStart, end: newEnd, startMin, endMin,
+        name: newName, start, end, startMin, endMin,
         // 氏名・開始時刻が変わりうるため、識別子も作り直す。〈ver0.4.18〉
         pkey: newPkey,
         // 自動配置を実行した時点での識別子は、氏名を変えても保持する。〈ver0.5.3〉
@@ -2003,7 +2023,9 @@
       // 同日2回勤務の識別子。〈ver0.4.18で追加。古い保存ファイルには無いが、
       // 復元時にsanitizePersonが氏名＋開始時刻から補完する〉
       pkey: typeof p.pkey === 'string' && p.pkey ? p.pkey : `${p.name}|${p.start}`,
-      frontOT: !!p.frontOT, backOT: !!p.backOT,
+      // 残業の種別（'' / 'OP' / 'GL'）。〈ver0.5.5〉真偽値で保存すると
+      // 読み込み時にOP残業とGL残業の区別が失われるため、文字列のまま保存する。
+      frontOT: normalizeOTKind(p.frontOT), backOT: normalizeOTKind(p.backOT),
       role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
       isRookie: !!p.isRookie,
       rookieRank: Number.isFinite(p.rookieRank) ? p.rookieRank : null,
@@ -2142,7 +2164,10 @@
       // 既存の保存ファイルにはpkeyが無いため、氏名＋開始時刻から補完する
       // （csv.js側と同じ組み立て方のため、同じ値になる）。
       pkey: typeof p.pkey === 'string' && p.pkey ? p.pkey : `${name}|${start}`,
-      frontOT: !!p.frontOT, backOT: !!p.backOT,
+      // 残業の種別（'' / 'OP' / 'GL'）。〈ver0.5.5〉
+      // 壊れた保存ファイルで想定外の値が入っていても、normalizeOTKind が
+      // 「残業なし」に丸めるため、誤った記号が紙に出ることはない。
+      frontOT: normalizeOTKind(p.frontOT), backOT: normalizeOTKind(p.backOT),
       role: p.role === '役席' || p.role === 'GL' ? p.role : 'OP',
       isRookie: !!p.isRookie,
       rookieRank: Number.isFinite(p.rookieRank) ? p.rookieRank : null,
@@ -2415,11 +2440,34 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // 残業（前残業/後残業）の時刻表示。黄色の背景＋「※」マークで示す
-  // （背景色が印刷されない設定でも※は必ず印刷される。背景色自体はCSS側で指定）
-  function printTimeSpan(text, isOT) {
-    if (!isOT) return `<span class="pt">${escapeHtml(text)}</span>`;
-    return `<span class="pt ot">${escapeHtml(text)}<sup class="ot-mark">※</sup></span>`;
+  // 残業（前残業/後残業）の時刻表示。OP残業＝黄色の背景＋「※」、
+  // GL残業＝緑色の背景＋「◆」で示す
+  // （背景色が印刷されない設定でも記号は必ず印刷される。背景色自体はCSS側で指定）
+  function printTimeSpan(text, otKind) {
+    const ot = otDisplay(otKind);
+    if (!ot) return `<span class="pt">${escapeHtml(text)}</span>`;
+    return `<span class="pt ot ${ot.cls}">${escapeHtml(text)}<sup class="ot-mark">${ot.mark}</sup></span>`;
+  }
+
+  // その紙に実際に出ている残業の種別（'OP' / 'GL'）を集める。凡例の出し分けに使う。
+  function collectOTKinds(persons) {
+    const kinds = new Set();
+    persons.forEach(p => {
+      if (!p) return;
+      if (otDisplay(p.frontOT)) kinds.add(p.frontOT);
+      if (otDisplay(p.backOT)) kinds.add(p.backOT);
+    });
+    return kinds;
+  }
+
+  // 印刷ページの凡例。その紙に出ている記号だけを載せ、残業が1件も無ければ何も出さない。
+  // 座席表そのものには記号1文字しか出さないため、意味はここで補う。
+  function otLegendHtml(kinds) {
+    const parts = [];
+    if (kinds.has('OP')) parts.push('※…OP残業');
+    if (kinds.has('GL')) parts.push('◆…GL残業');
+    if (parts.length === 0) return '';
+    return `<div class="print-legend">${parts.join('／')}（出勤時刻＝前残業／退勤時刻＝後残業）</div>`;
   }
 
   // 座席1枠内の「1人分」を描画する。人がいなければ空のまま（枠の大きさは常に揃える）
@@ -2499,11 +2547,12 @@
     const dayGridHtml = printSeatGridHtml(appState.seats);
     const dayOverflowHtml = printOverflowHtml(appState.overflow);
 
-    // 残業（※マーク）が1件でもあれば、意味を説明する凡例を表示する（ページごとに判定）
-    const dayHasOT = SEATS.some(s => (appState.seats[s.key] || []).some(p => p && (p.frontOT || p.backOT)))
-      || Object.values(appState.early).some(p => p && (p.frontOT || p.backOT))
-      || Object.values(appState.late).some(p => p && (p.frontOT || p.backOT));
-    const dayLegendHtml = dayHasOT ? '<div class="print-legend">※…残業（前残業＝出勤時刻／後残業＝退勤時刻）</div>' : '';
+    // 残業の記号が1件でもあれば、意味を説明する凡例を表示する。
+    // ページごと・種別ごとに判定するため、OP残業しかいない日に「◆…GL残業」は出ない。
+    const dayLegendHtml = otLegendHtml(collectOTKinds([]
+      .concat(...SEATS.map(s => appState.seats[s.key] || []))
+      .concat(Object.values(appState.early))
+      .concat(Object.values(appState.late))));
 
     // --- 2ページ目: 夜勤 ---
     // 左＝見出しなしの予備枠（通常は空。手動で置いた場合はその内容を印刷）、右＝夜勤GL枠
@@ -2514,10 +2563,10 @@
     const nightGridHtml = printSeatGridHtml(appState.nightSeats);
     const nightOverflowHtml = printOverflowHtml(appState.nightOverflow);
 
-    const nightHasOT = SEATS.some(s => (appState.nightSeats[s.key] || []).some(p => p && (p.frontOT || p.backOT)))
-      || Object.values(appState.nightGL).some(p => p && (p.frontOT || p.backOT))
-      || Object.values(appState.nightSpare).some(p => p && (p.frontOT || p.backOT));
-    const nightLegendHtml = nightHasOT ? '<div class="print-legend">※…残業（前残業＝出勤時刻／後残業＝退勤時刻）</div>' : '';
+    const nightLegendHtml = otLegendHtml(collectOTKinds([]
+      .concat(...SEATS.map(s => appState.nightSeats[s.key] || []))
+      .concat(Object.values(appState.nightGL))
+      .concat(Object.values(appState.nightSpare))));
 
     return `<!DOCTYPE html>
 <html lang="ja">
@@ -2552,13 +2601,17 @@
   .print-name { font-size:16px; font-weight:600; }
   .print-time { font-size:16px; color:#555; margin-top:0.5mm; }
   .print-blank { flex:1; }
-  /* 残業の目印: 画面・印刷（プレビュー含む）どちらも黄色で塗りつぶす。
+  /* 残業の目印: 画面・印刷（プレビュー含む）どちらも塗りつぶす。
+     OP残業＝黄色、GL残業＝緑色。
      以前は印刷時のみ薄いグレーに切り替える案（Excelの「12.5%灰色」相当）を
-     試したが、環境によって印刷に反映されなかったため、黄色に統一している。 */
+     試したが、環境によって印刷に反映されなかったため、色を統一している。
+     背景色が出ないプリンタでも見分けられるよう、※（OP残業）／◆（GL残業）の
+     記号を必ず併記している（printTimeSpan を参照）。 */
   .print-time .pt.ot, .print-leader-time .pt.ot {
     font-weight:700; padding:0 0.6mm; border-radius:0.3mm;
-    background-color:#FFF3B0;
   }
+  .print-time .pt.ot-op, .print-leader-time .pt.ot-op { background-color:#FFF3B0; }
+  .print-time .pt.ot-gl, .print-leader-time .pt.ot-gl { background-color:#C8EFD0; }
   .ot-mark { font-size:8px; vertical-align:top; margin-left:0.3mm; }
   .pt-sep { margin:0 0.5mm; color:#777; }
   .print-divider { border-top:1px dashed #999; }

@@ -824,7 +824,9 @@ window.SeatTool.algorithm = (function () {
       // pkeyを持たない古い呼び出し元から渡された場合はここで補完する。
       pkey: r.pkey || `${r.name}|${r.start}`,
       startMin: r.startMin, endMin: r.endMin, shiftIndex: idx,
-      frontOT: !!r.frontOT, backOT: !!r.backOT,
+      // 残業の種別（'' / 'OP' / 'GL'）。〈ver0.5.5〉真偽値に潰すと種別が失われ、
+      // 座席表でOP残業とGL残業を描き分けられなくなるため、文字列のまま持ち回る。
+      frontOT: r.frontOT || '', backOT: r.backOT || '',
       // 役割（役席/GL/OP）。座席グリッドに来るのは基本OPだが、夜勤では役席・GLの
       // 2人目以降も座席に配置されるため、役割を保持しておく（夜勤GL枠が空になって
       // いないかの違反チェックで「座席側に夜勤の役席・GLがいるか」の判定に使う）
