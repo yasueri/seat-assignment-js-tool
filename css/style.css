@@ -21,8 +21,11 @@
     --priority:#C2410C;
     --priority-bg:#FDEBE0;
     --empty-border:#C7CEDA;
+    /* 残業の目印。OP残業＝黄、GL残業＝緑。〈ver0.5.5でGL残業を追加〉 */
     --ot-bg:#FFF3B0;
     --ot-mark:#8A6D00;
+    --ot-gl-bg:#C8EFD0;
+    --ot-gl-mark:#1B6B3A;
     --font-ui: "Yu Gothic UI","Meiryo","Hiragino Kaku Gothic ProN",sans-serif;
     --font-mono: "Consolas","Courier New",monospace;
   }
@@ -494,17 +497,22 @@
     font-size:12px;
     margin:0 1px;
   }
+  /* 残業の目印。ot-op（OP残業）＝黄色マーカー＋「※」、
+     ot-gl（GL残業）＝緑色マーカー＋「◆」。記号はui.js側で付与する。
+     印刷時にマーカーが出ない設定のプリンタでも、記号だけで見分けられる。 */
   .ot-time{
-    background:var(--ot-bg);
     border-radius:4px;
     padding:0 3px;
   }
+  .ot-time.ot-op{ background:var(--ot-bg); }
+  .ot-time.ot-gl{ background:var(--ot-gl-bg); }
   .ot-mark{
     font-size:10px;
     vertical-align:top;
     margin-left:1px;
-    color:var(--ot-mark);
   }
+  .ot-time.ot-op .ot-mark{ color:var(--ot-mark); }
+  .ot-time.ot-gl .ot-mark{ color:var(--ot-gl-mark); }
   .person-card .name{
     flex:1;
     font-weight:600;
