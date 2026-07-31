@@ -362,12 +362,22 @@ window.SeatTool.csv = (function () {
     return rows.filter(r => r.date === date);
   }
 
-  // dates（ソート済みのYYYY-MM-DD配列）から「2026年6月」のようなラベルを作る
+  // dates（ソート済みのYYYY-MM-DD配列）から「2026年6月」のようなラベルを作る。
+  // 〈ver0.5.7.2で変更〉年末年始のシフトは12月に加えて翌1月上旬まで1つのCSVに
+  // 入るため、先頭の日付だけで年月を決めると1月を選んでも「12月」と表示されて
+  // しまう。複数の年月にまたがる場合は「2025年12月〜2026年1月」と範囲で示す。
+  function yearMonthOf(date) {
+    const m = String(date || '').match(/^(\d{4})-(\d{2})-\d{2}$/);
+    return m ? { y: parseInt(m[1], 10), m: parseInt(m[2], 10), key: `${m[1]}-${m[2]}` } : null;
+  }
   function yearMonthLabelFromDates(dates) {
     if (!dates || dates.length === 0) return '';
-    const m = dates[0].match(/^(\d{4})-(\d{2})-\d{2}$/);
-    if (!m) return '';
-    return `${parseInt(m[1], 10)}年${parseInt(m[2], 10)}月`;
+    const parsed = dates.map(yearMonthOf).filter(Boolean);
+    if (parsed.length === 0) return '';
+    const first = parsed[0];
+    const last = parsed[parsed.length - 1];
+    const label = ym => `${ym.y}年${ym.m}月`;
+    return first.key === last.key ? label(first) : `${label(first)}〜${label(last)}`;
   }
 
   // ---------- rookie.csv ----------
@@ -710,7 +720,7 @@ window.SeatTool.csv = (function () {
 
   return {
     parseCSV, timeToMinutes, normalizeTime, normalizeDate, nameKey, displayName,
-    parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
+    parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates, yearMonthOf,
     isNightShift, isLateShift, normalizeOTKind,
     parseRookieRows, parseSecretRows, parseOjtRows,
     // 読み込み時の事前チェック（A-1・A-2）〈ver0.5.7で追加〉

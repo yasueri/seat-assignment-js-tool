@@ -8,7 +8,7 @@
   "use strict";
 
   const {
-    parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
+    parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates, yearMonthOf,
     parseRookieRows, parseSecretRows, parseOjtRows, timeToMinutes, normalizeTime, isNightShift,
     normalizeOTKind, nameKey, displayName, preflightCsv, HEADER_SPECS,
   } = NS.csv;
@@ -72,6 +72,19 @@
 
   // ---------- アプリの状態 ----------
   const rawText = { shift: null, rookie: null, secret: null, ojt: null };
+  // 読み込み時に弾いたファイル（A-1 ヘッダー不一致 / A-2 文字化け）のキー。
+  // 〈ver0.5.7.2で追加〉弾かれたファイルは rawText が null になるため、
+  // そのまま実行すると「はじめから渡していない場合」と全く同じ扱いになり、
+  // ルールの効いていない座席表が青いお知らせ1行だけで完成してしまう。
+  // 利用者は渡したつもりでいるので、実行前に確認を出すためにここで覚えておく。
+  const rejectedFiles = new Set();
+  // 任意CSVが無い／読み込めなかったときに「何が効かないのか」を伝えるための言い換え。
+  // 実行前の確認ダイアログとメッセージ欄の両方で同じ言葉を使う〈ver0.5.7.2〉。
+  const OPTIONAL_RULE_LABELS = {
+    rookie: '新人固定席',
+    secret: '固定席・禁止席・隣接禁止・要サポート・優先フラグのルール',
+    ojt: '教官・OJTの同席',
+  };
   const appState = {
     seats: initEmptyState(), early: initLeaderState(), late: initLeaderState(),
     overflow: [],
@@ -370,6 +383,7 @@
   // 表示中の座席表は正しい内容のまま（日付ラベルも一致している）。
   function rejectFile(key, messages) {
     rawText[key] = null;
+    rejectedFiles.add(key);
     markFileFailed(key, '読み込めませんでした（下記のメッセージをご確認ください）');
     if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
     emitMessages(messages.map(message => ({ level: 'error', message })));
@@ -385,6 +399,7 @@
       const pre = preflightCsv(key, text);
       if (!pre.ok) { rejectFile(key, pre.messages); return; }
       rawText[key] = text;
+      rejectedFiles.delete(key); // 読み直して通ったので、弾いた記録は消す〈ver0.5.7.2〉
       markFileLoaded(key, file.name);
       if (key === 'shift') refreshShiftMonthly();
       // secret.csvを（再)読み込みしたとき、既に配置が存在する場合は
@@ -398,6 +413,7 @@
       if (key === 'rookie' && hasRunOnce) refreshRookieIndexesFromRookie();
     } catch (e) {
       rawText[key] = null;
+      rejectedFiles.add(key);
       markFileFailed(key);
       if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
       emitMessages([{ level: 'error', message: `${fileLabel(key)}のファイルを開けませんでした。ファイルが移動・削除されていないかご確認ください。` }]);
@@ -502,11 +518,20 @@
       updateRunButtonState();
       return;
     }
+    // 〈ver0.5.7.2で変更〉年末年始のシフトは12月＋翌1月上旬が1つのCSVに入る。
+    // 従来は全部「1日（木）」のように日にちだけを出していたため、12月の末尾に
+    // 1月の日付がそのまま続いて見え、1か月違いで選んでしまう恐れがあった。
+    // 先頭の年月と違う日付にだけ「1月1日（木）」と月を付ける（2つ目以降の月は
+    // すべての日に付ける。境目の1件だけに付けると、下へスクロールした人には
+    // それが何月なのか分からないため）。単月のCSVでは従来どおり日にちだけになる。
+    const firstYm = yearMonthOf(dates[0]);
     dates.forEach(d => {
       const opt = document.createElement('option');
       opt.value = d;
       const dt = new Date(d + 'T00:00:00');
-      opt.textContent = `${dt.getDate()}日（${WEEKDAY_NAMES[dt.getDay()]}）`;
+      const ym = yearMonthOf(d);
+      const monthPart = (firstYm && ym && ym.key !== firstYm.key) ? `${ym.m}月` : '';
+      opt.textContent = `${monthPart}${dt.getDate()}日（${WEEKDAY_NAMES[dt.getDay()]}）`;
       select.appendChild(opt);
     });
     select.disabled = false;
@@ -957,7 +982,12 @@
 
   document.getElementById('btn-run').addEventListener('click', () => {
     if (!rawText.shift) {
-      alert('月間シフトCSVを選択してください。');
+      // 月間シフトCSVを選んだのに弾かれた場合と、そもそも選んでいない場合とで
+      // 言い方を変える。「選択してください」だけだと、選んだ本人には話が通じない。
+      alert(rejectedFiles.has('shift')
+        ? '月間シフトCSVは読み込めていないため、自動配置を実行できません。\n\n'
+          + '内容は画面の「2. メッセージ」欄（赤色）に表示しています。修正してから、もう一度読み込んでください。'
+        : '月間シフトCSVを選択してください。');
       return;
     }
     if (!shiftMonthly || shiftMonthly.dates.length === 0) {
@@ -979,6 +1009,23 @@
       if (!ok) return;
     }
 
+    // 読み込みを弾いた任意CSVがある場合の確認。〈ver0.5.7.2で追加〉
+    // 弾かれたファイルは未読み込みと同じ扱いになるため、そのまま実行すると
+    // 固定席も禁止席も効いていない座席表が黙って完成する。読み込み時の
+    // ダイアログを閉じてしまった人にも必ず届くよう、実行の直前にもう一度出す。
+    // 「今日はそのファイルなしで出す」という判断は残したいので、中断ではなく
+    // OK／キャンセルの確認にとどめる。
+    const rejectedOptional = ['secret', 'rookie', 'ojt'].filter(k => rejectedFiles.has(k));
+    if (rejectedOptional.length > 0) {
+      const lines = rejectedOptional.map(k => `・${fileLabel(k)}（${OPTIONAL_RULE_LABELS[k]}）`);
+      const ok = confirm(
+        `次のファイルは読み込めていないため、そのルールは効きません。\n${lines.join('\n')}\n\n`
+        + 'このまま自動配置を実行しますか？\n'
+        + '（キャンセルを押すと何もしません。ファイルを直して読み込み直してください）'
+      );
+      if (!ok) return;
+    }
+
     // rookie.csv / secret.csv / ojt.csv はいずれも必須ではない。未読み込みの場合は
     // 該当する処理（新人固定席・固定席や禁止席・隣接禁止のチェック・教官とOJT・要サポート）を
     // 丸ごとスキップし、通常配置のみを行う
@@ -994,8 +1041,22 @@
     const { opRows, leaderRows, nightOpRows, nightLeaderRows } = splitDayRows(dayRows, ojtIndexes);
 
     const allLogs = [...shiftMonthly.logs, ...rookieParsed.logs, ...secretParsed.logs, ...ojtParsed.logs];
-    if (!rawText.rookie) allLogs.push({ level: 'info', message: 'rookie.csvが読み込まれていないため、新人固定席は使用せず配置しました。' });
-    if (!rawText.secret) allLogs.push({ level: 'info', message: 'secret.csvが読み込まれていないため、固定席・禁止席・隣接禁止・要サポート・優先フラグのルールは使用せず配置しました。' });
+    // 〈ver0.5.7.2で文言を変更〉「使用せず配置しました」と過去形で書いていたため、
+    // B-1〜B-9で中断して盤面が空になった場合でも「配置した」と読めてしまっていた。
+    // 中断しても成立する、時制のない言い方に統一する。
+    // また、読み込みを弾いたファイル（rejectedFiles）は「はじめから渡していない」
+    // 場合と区別し、黄色で「読み込めなかった」と明示する。青のお知らせのままだと、
+    // 渡したつもりの利用者に事情が伝わらない。
+    ['rookie', 'secret', 'ojt'].forEach(key => {
+      if (rawText[key]) return;
+      const label = fileLabel(key);
+      if (rejectedFiles.has(key)) {
+        allLogs.push({ level: 'warn', message: `${label}は読み込めなかったため、${OPTIONAL_RULE_LABELS[key]}は効いていません。ファイルを修正して読み込み直してください。` });
+      } else if (key !== 'ojt') {
+        // ojt.csvは「その日は使わない」運用が普通にあるため、未読み込みでも知らせない（従来どおり）
+        allLogs.push({ level: 'info', message: `${label}が読み込まれていないため、${OPTIONAL_RULE_LABELS[key]}は使用しません。` });
+      }
+    });
 
     // rookie.csv に載っている人が、その日は役席・GLとして出勤する場合。〈ver0.5.7で警告へ変更〉
     // ver0.5.6では配置を実行しない扱いにしていたが撤回した。同じ人がOP勤務の日は
@@ -2227,14 +2288,30 @@
           const seatedAt = SEATS.find(s => seats[s.key].filter(Boolean).some(p => p.name === name));
           if (seatedAt) seatedAtList.push({ label: gridLabel, key: seatedAt.key });
         }
-        const isInOverflow = appState.overflow.some(p => p && p.name === name)
-          || appState.nightOverflow.some(p => p && p.name === name);
+        const inDayOverflow = appState.overflow.some(p => p && p.name === name);
+        const inNightOverflow = appState.nightOverflow.some(p => p && p.name === name);
+        const isInOverflow = inDayOverflow || inNightOverflow;
         if (seatedAtList.length === 0 && !isInOverflow) continue; // その日出勤していない
 
         const badPlacement = seatedAtList.length === 0 || seatedAtList.some(o => !seatKeys.includes(o.key));
         if (badPlacement) {
           const seatList = seatKeys.map(k => `${numberOfKey(k)}番`).join(' または ');
-          violations.push(`${name}さんが${label}で指定された座席（${seatList}）に配置されていません`);
+          // 〈ver0.5.7.2で変更〉このメッセージだけ【日勤】【夜勤】が付いておらず、
+          // 他の違反と並んだときにどちらのパネルの話か分からなかった。あわせて
+          // 「今どこにいるか」も添える。指定席にいないことだけを伝えても、
+          // 座席表とあふれ欄を目で探す手間がそのまま残るため。
+          const wrongSeats = seatedAtList.filter(o => !seatKeys.includes(o.key));
+          const where = [
+            ...wrongSeats.map(o => `${o.label}${numberOfKey(o.key)}番の座席`),
+            ...(inDayOverflow ? ['【日勤】あふれ欄'] : []),
+            ...(inNightOverflow ? ['【夜勤】あふれ欄'] : []),
+          ];
+          // 先頭に付ける枠の名前は、実際にその人がいる側にそろえる
+          const prefix = where.length > 0 ? (where[0].startsWith('【夜勤】') ? '【夜勤】' : '【日勤】') : '';
+          const nowAt = where.length > 0
+            ? `（現在は${where.map(w => w.replace(/^【(日勤|夜勤)】/, '')).join(' と ')}）`
+            : '';
+          violations.push(`${prefix}${name}さんが${label}で指定された座席（${seatList}）に配置されていません${nowAt}`);
         }
       }
     };
