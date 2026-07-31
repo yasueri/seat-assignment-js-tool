@@ -428,8 +428,13 @@ window.SeatTool.csv = (function () {
   // 適用される（半角・全角どちらの数字も可）。値が入っている場合、その人は他の
   // どの配置ルールよりも先に処理される（数値が小さいほど優先。複数行にまたがって
   // 別の値が入力されていた場合は最小値を採用する）。
-  // ただし種別を書かずに優先フラグだけを入力した行は、種別と対象座席の書き忘れと
-  // みなして priorityOnlyRows に集め、呼び出し側で配置を中断する〈ver0.5.7で追加。B-9〉。
+  // ただし、優先フラグは登録できたのに、その行が座席に関する指定を1つも作れなかった
+  // 場合（種別の書き忘れ・誤字のほか、種別は正しいが対象座席や対象2が読み取れず行ごと
+  // 読み飛ばした場合を含む）は、残るのが優先フラグだけになり、意図した席とは違う
+  // 座席表が黙って完成してしまう。この行は priorityOnlyRows に集め、呼び出し側で
+  // 配置を中断する〈ver0.5.7で追加。B-9／ver0.5.7.1で対象を拡張〉。
+  // なお優先フラグの値が数値でない場合はその優先フラグ自体を無視する（弾く）ため、
+  // B-9の対象にはならず、種別の誤字は通常の警告として表示される。
   // resolveName は氏名の表記を月間シフトCSVに合わせる関数〈ver0.5.6で追加〉。
   // 対象1・対象2の両方に適用する。省略した場合は displayName と同じ動作になる。
   function parseSecretRows(text, seatByNumber, resolveName) {
@@ -449,28 +454,12 @@ window.SeatTool.csv = (function () {
     const priorityOnlyRows = [];
     const KNOWN_TYPES = ['隣接禁止', '禁止席', '固定席', '要サポート'];
 
-    dataRows.forEach((r, i) => {
-      const type = cell(r, 0);
-      const targetNameForFlag = resolve(cell(r, 1)); // 優先フラグは対象1の氏名に対して適用する
-      const flagCell = cell(r, 4);
-      // 種別が書かれていない（＝座席に関する指定が何もない）行かどうか。
-      // 優先フラグは席を決めず処理の順番を早めるだけのため、これだけでは
-      // 「意図した固定席とは違う座席表」が黙って完成してしまう。
-      const typeMissing = !KNOWN_TYPES.includes(type);
-      if (flagCell) {
-        if (!targetNameForFlag) {
-          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 優先フラグが入力されていますが対象1が空欄のため無視しました` });
-        } else {
-          const normalized = normalizeDigits(flagCell).trim();
-          if (/^\d+$/.test(normalized)) {
-            result.push({ type: 'priority_flag', name: targetNameForFlag, flag: parseInt(normalized, 10) });
-            if (typeMissing) priorityOnlyRows.push({ rowNumber: i + 2, name: targetNameForFlag, typeCell: type });
-          } else {
-            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 優先フラグ「${flagCell}」は数値として認識できません` });
-          }
-        }
-      }
-
+    // 種別ごとの解析。読み飛ばす条件が多く return で抜ける箇所が多いため、
+    // 独立した関数にしている〈ver0.5.7.1〉。呼び出し側は「この関数が result に
+    // 1件も追加しなかった＝この行は座席に関する指定を何も作らなかった」を見て
+    // B-9を判定する。priorityRegistered は、この行で優先フラグを登録できたか。
+    // 登録できていれば種別の警告は出さない（B-9のメッセージと二重になるため）。
+    function parseTypeCell(r, i, type, priorityRegistered) {
       if (type === '隣接禁止') {
         const name1 = resolve(cell(r, 1));
         const name2 = resolve(cell(r, 2));
@@ -534,10 +523,52 @@ window.SeatTool.csv = (function () {
           seenNumsInRow.add(seatNum);
           result.push({ type: kind, name, row: seat.row, col: seat.col });
         });
-      } else if (!flagCell) {
-        // 優先フラグだけが入力されている行は priorityOnlyRows で中断メッセージを
-        // 出すため、ここでは同じ行について二重に警告しない。〈ver0.5.7〉
+      } else if (!priorityRegistered) {
+        // 優先フラグを登録できた行は、B-9のメッセージで同じ内容を伝えるため
+        // ここでは二重に警告しない。〈ver0.5.7.1〉優先フラグが数値でなかった行は
+        // 登録されないので、種別の誤字はこちらで必ず伝わる。
         logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 種別「${type}」は認識できません（「隣接禁止」「禁止席」「固定席」「要サポート」のいずれか）` });
+      }
+    }
+
+    dataRows.forEach((r, i) => {
+      const type = cell(r, 0);
+      const targetNameForFlag = resolve(cell(r, 1)); // 優先フラグは対象1の氏名に対して適用する
+      const flagCell = cell(r, 4);
+      // この行で優先フラグを登録できたかどうか。数値以外は登録しない（弾く）。
+      let priorityRegistered = false;
+      if (flagCell) {
+        if (!targetNameForFlag) {
+          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 優先フラグが入力されていますが対象1が空欄のため無視しました` });
+        } else {
+          const normalized = normalizeDigits(flagCell).trim();
+          if (/^\d+$/.test(normalized)) {
+            result.push({ type: 'priority_flag', name: targetNameForFlag, flag: parseInt(normalized, 10) });
+            priorityRegistered = true;
+          } else {
+            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 優先フラグ「${flagCell}」は数値として認識できません` });
+          }
+        }
+      }
+
+      // 座席に関する指定をこの行が1件でも作ったかどうかは、result の件数で見る。
+      const countBefore = result.length;
+      parseTypeCell(r, i, type, priorityRegistered);
+
+      // ---- B-9 優先フラグだけが効いてしまう行 ----
+      // 〈ver0.5.7.1で判定を拡張〉ver0.5.7では「種別が空欄・誤字」の行だけを
+      // 対象にしていたが、種別が正しくても対象座席や対象2が読み取れずに行ごと
+      // 読み飛ばした場合（例:「固定席,山田 太郎,,,1」）も、残るのは優先フラグだけで
+      // 結果は同じ。座席表を見てもその人が普通に座っているだけなので気づけない。
+      // typeCell / typeKnown は、呼び出し側（ui.js）がメッセージの書き出しを
+      // 入力内容に合わせて変えるために渡す。
+      if (priorityRegistered && result.length === countBefore) {
+        priorityOnlyRows.push({
+          rowNumber: i + 2,
+          name: targetNameForFlag,
+          typeCell: type,
+          typeKnown: KNOWN_TYPES.includes(type),
+        });
       }
     });
 
