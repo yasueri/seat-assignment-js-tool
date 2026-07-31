@@ -18,27 +18,52 @@ window.SeatTool.csv = (function () {
   "use strict";
 
   // ---------- 汎用CSVパーサー（RFC4180簡易実装） ----------
+  // 各行の配列には lineNo（CSVファイル内の実際の行番号。1始まり）を付ける。
+  // 〈ver0.5.7.3で追加〉空行はこの関数で取り除くため、取り除いた後の添字から
+  // 「i + 2行目」と計算すると、空行より下の行がすべて1つずつ手前にずれた行番号で
+  // 表示されていた。中断メッセージ（B-8・B-9）は行番号だけが直す手がかりのため、
+  // 元の行番号をそのまま持ち回る。セル内改行（引用符で囲まれた改行）があっても、
+  // lineNo はその行の先頭を指す。
   function parseCSV(text) {
     text = text.replace(/^\uFEFF/, ''); // BOM除去
     const rows = [];
     let row = [], field = '', inQuotes = false;
+    // lineNo … いま読んでいる文字がファイルの何行目か
+    // rowStartLine … いま組み立てている行が始まった行番号
+    let lineNo = 1, rowStartLine = 1;
+    const pushRow = () => {
+      row.push(field);
+      row.lineNo = rowStartLine;
+      rows.push(row);
+      row = []; field = '';
+      rowStartLine = lineNo;
+    };
     for (let i = 0; i < text.length; i++) {
       const c = text[i];
       if (inQuotes) {
         if (c === '"') {
           if (text[i + 1] === '"') { field += '"'; i++; }
           else inQuotes = false;
-        } else field += c;
+        } else {
+          if (c === '\n') lineNo++; // セル内改行もファイル上は行が進む
+          field += c;
+        }
       } else {
         if (c === '"') inQuotes = true;
         else if (c === ',') { row.push(field); field = ''; }
         else if (c === '\r') { /* skip */ }
-        else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+        else if (c === '\n') { lineNo++; pushRow(); }
         else field += c;
       }
     }
-    if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+    if (field.length > 0 || row.length > 0) pushRow();
     return rows.filter(r => !(r.length === 1 && r[0].trim() === ''));
+  }
+
+  // その行のCSVファイル内での行番号。parseCSVを通していない行（テストからの
+  // 直接呼び出しなど）に備えて、従来どおりの「データ行の添字 + 2」を代わりに返す。
+  function lineNoOf(row, dataRowIndex) {
+    return (row && Number.isFinite(row.lineNo)) ? row.lineNo : dataRowIndex + 2;
   }
 
   // ---------- 氏名処理 ----------
@@ -268,7 +293,8 @@ window.SeatTool.csv = (function () {
     const nameMap = new Map();
 
     dataRows.forEach((r, i) => {
-      const rowLabel = `月間シフトCSV ${i + 2}行目`;
+      const rowNo = lineNoOf(r, i);
+      const rowLabel = `月間シフトCSV ${rowNo}行目`;
       const rawDate = cell(r, 0);
       // 氏名はここで表記を整え、以降（重複判定・pkey・画面表示）はこの表記だけを使う。
       // 読み飛ばす行の氏名も対応表に載せる。載せた表記を必ずこの行でも使うため、
@@ -285,24 +311,24 @@ window.SeatTool.csv = (function () {
       // 「2026-06-01」「2026/6/1」などを内部形式「YYYY-MM-DD」に正規化する
       const date = normalizeDate(rawDate);
       if (!date) {
-        skipped.push({ rowNumber: i + 2, date: null, name, reason: `日付（${rawDate || '空欄'}）を読み取れませんでした` });
+        skipped.push({ rowNumber: rowNo, date: null, name, reason: `日付（${rawDate || '空欄'}）を読み取れませんでした` });
         logs.push({ level: 'warn', message: `${rowLabel}: 日付の形式（YYYY-MM-DD または YYYY/M/D）が不正なため読み飛ばしました（${rawDate || '空欄'}）。元のExcelを修正し、CSVを出力し直してください。` });
         return;
       }
       if (!name) {
-        skipped.push({ rowNumber: i + 2, date, name: '', reason: '氏名が空欄です' });
+        skipped.push({ rowNumber: rowNo, date, name: '', reason: '氏名が空欄です' });
         logs.push({ level: 'warn', message: `${rowLabel}: 氏名が空欄のため読み飛ばしました。元のExcelを修正し、CSVを出力し直してください。` });
         return;
       }
       const startMin = timeToMinutes(start);
       const endMin = timeToMinutes(end);
       if (startMin == null || endMin == null) {
-        skipped.push({ rowNumber: i + 2, date, name, reason: `時刻（${start || '空欄'}-${end || '空欄'}）を読み取れませんでした` });
+        skipped.push({ rowNumber: rowNo, date, name, reason: `時刻（${start || '空欄'}-${end || '空欄'}）を読み取れませんでした` });
         logs.push({ level: 'warn', message: `${rowLabel}: 時刻の形式が不正なため読み飛ばしました（${name}）。元のExcelを修正し、CSVを出力し直してください。` });
         return;
       }
       if (startMin >= endMin) {
-        skipped.push({ rowNumber: i + 2, date, name, reason: `終了時刻（${end}）が開始時刻（${start}）以前になっています` });
+        skipped.push({ rowNumber: rowNo, date, name, reason: `終了時刻（${end}）が開始時刻（${start}）以前になっています` });
         logs.push({ level: 'warn', message: `${rowLabel}: 開始時刻が終了時刻以降になっているため読み飛ばしました（${name}）。夜勤は終了時刻を24時以降の表記（例: 翌8:00は32:00）で入力してください。元のExcelを修正し、CSVを出力し直してください。` });
         return;
       }
@@ -310,7 +336,7 @@ window.SeatTool.csv = (function () {
       start = normalizeTime(start);
       end = normalizeTime(end);
       if (role !== '役席' && role !== 'GL' && role !== 'OP') {
-        skipped.push({ rowNumber: i + 2, date, name, reason: `役割「${role || '空欄'}」を認識できませんでした（役席・GL・OPのいずれか）` });
+        skipped.push({ rowNumber: rowNo, date, name, reason: `役割「${role || '空欄'}」を認識できませんでした（役席・GL・OPのいずれか）` });
         logs.push({ level: 'warn', message: `${rowLabel}: 役割「${role}」は認識できません（役席・GL・OPのいずれか）。読み飛ばしました（${name}）。元のExcelを修正し、CSVを出力し直してください。` });
         return;
       }
@@ -325,7 +351,7 @@ window.SeatTool.csv = (function () {
           prev => startMin < prev.endMin && prev.startMin < endMin
         );
         if (conflict) {
-          skipped.push({ rowNumber: i + 2, date, name, reason: `時間帯の重なる勤務が複数回記載されています（${conflict.start}-${conflict.end} / ${start}-${end}）` });
+          skipped.push({ rowNumber: rowNo, date, name, reason: `時間帯の重なる勤務が複数回記載されています（${conflict.start}-${conflict.end} / ${start}-${end}）` });
           logs.push({ level: 'warn', message: `${rowLabel}: ${date}の「${name}」が時間帯の重なる勤務として複数回記載されています（${conflict.start}-${conflict.end} / ${start}-${end}）。この行は読み飛ばしました。元のExcelを修正し、CSVを出力し直してください。` });
           return;
         }
@@ -400,13 +426,13 @@ window.SeatTool.csv = (function () {
       const degree = parseFloat(normalizeDigits(cell(r, 1)).replace(/．/g, '.'));
       if (!name) return;
       if (isNaN(degree)) {
-        logs.push({ level: 'warn', message: `rookie.csv ${i + 2}行目: 新人度合いが数値ではないため読み飛ばしました（${name}）` });
+        logs.push({ level: 'warn', message: `rookie.csv ${lineNoOf(r, i)}行目: 新人度合いが数値ではないため読み飛ばしました（${name}）` });
         return;
       }
       // 重複判定は空白を除いた氏名（nameKey）で行う。〈ver0.5.6で変更〉
       // 「山田太郎」と「山田 太郎」は同一人物のため、2行あれば重複として扱う。
       if (seenNames.has(nameKey(name))) {
-        logs.push({ level: 'warn', message: `rookie.csv ${i + 2}行目: 「${name}」が複数回記載されています。最初の行のみ使用します。` });
+        logs.push({ level: 'warn', message: `rookie.csv ${lineNoOf(r, i)}行目: 「${name}」が複数回記載されています。最初の行のみ使用します。` });
         return;
       }
       seenNames.add(nameKey(name));
@@ -469,12 +495,12 @@ window.SeatTool.csv = (function () {
     // 1件も追加しなかった＝この行は座席に関する指定を何も作らなかった」を見て
     // B-9を判定する。priorityRegistered は、この行で優先フラグを登録できたか。
     // 登録できていれば種別の警告は出さない（B-9のメッセージと二重になるため）。
-    function parseTypeCell(r, i, type, priorityRegistered) {
+    function parseTypeCell(r, rowNo, type, priorityRegistered) {
       if (type === '隣接禁止') {
         const name1 = resolve(cell(r, 1));
         const name2 = resolve(cell(r, 2));
         if (!name1 || !name2) {
-          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 隣接禁止の対象者名が不足しています` });
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象者名が不足しています` });
           return;
         }
         // 対象1と対象2が同じ人の行は読み飛ばす。〈ver0.5.7で追加〉
@@ -483,7 +509,7 @@ window.SeatTool.csv = (function () {
         // ダイアログだけが出て原因が分からない。ojt.csvで教官名とOJT対象者に
         // 同じ氏名が書かれている場合の扱いと揃える。
         if (nameKey(name1) === nameKey(name2)) {
-          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 隣接禁止の対象1と対象2に同じ氏名（${name1}）が指定されています。自分自身とは隣接禁止にできないため読み飛ばしました` });
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象1と対象2に同じ氏名（${name1}）が指定されています。自分自身とは隣接禁止にできないため読み飛ばしました` });
           return;
         }
         result.push({ type: 'adjacent_forbidden', name1, name2 });
@@ -491,7 +517,7 @@ window.SeatTool.csv = (function () {
         const name = resolve(cell(r, 1));
         const seatCell = cell(r, 3);
         if (!name || !seatCell) {
-          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: ${type}の情報が不足しています` });
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: ${type}の情報が不足しています` });
           return;
         }
         const kind = type === '禁止席' ? 'seat_forbidden' : (type === '固定席' ? 'seat_designated' : 'seat_support');
@@ -510,7 +536,7 @@ window.SeatTool.csv = (function () {
         tokens.forEach(rawTok => {
           if (rawTok === '夜勤GL席') {
             if (kind !== 'seat_designated') {
-              logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「夜勤GL席」は固定席でのみ指定できます（禁止席・要サポートには指定できません）` });
+              logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 「夜勤GL席」は固定席でのみ指定できます（禁止席・要サポートには指定できません）` });
               return;
             }
             result.push({ type: 'night_gl_designated', name });
@@ -520,13 +546,13 @@ window.SeatTool.csv = (function () {
           // 扱いをそろえたもの。メッセージには利用者が書いたままの文字列を出す。
           const tok = normalizeDigits(rawTok);
           if (!/^\d+$/.test(tok)) {
-            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 「${rawTok}」は座席番号として認識できません` });
+            logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 「${rawTok}」は座席番号として認識できません` });
             return;
           }
           const seatNum = parseInt(tok, 10);
           const seat = seatByNumber(seatNum);
           if (!seat) {
-            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 座席番号${seatNum}は存在しません` });
+            logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 座席番号${seatNum}は存在しません` });
             return;
           }
           if (seenNumsInRow.has(seatNum)) return;
@@ -537,33 +563,39 @@ window.SeatTool.csv = (function () {
         // 優先フラグを登録できた行は、B-9のメッセージで同じ内容を伝えるため
         // ここでは二重に警告しない。〈ver0.5.7.1〉優先フラグが数値でなかった行は
         // 登録されないので、種別の誤字はこちらで必ず伝わる。
-        logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 種別「${type}」は認識できません（「隣接禁止」「禁止席」「固定席」「要サポート」のいずれか）` });
+        logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 種別「${type}」は認識できません（「隣接禁止」「禁止席」「固定席」「要サポート」のいずれか）` });
       }
     }
 
     dataRows.forEach((r, i) => {
+      const rowNo = lineNoOf(r, i);
       const type = cell(r, 0);
       const targetNameForFlag = resolve(cell(r, 1)); // 優先フラグは対象1の氏名に対して適用する
       const flagCell = cell(r, 4);
+      // 完全な空行は黙って読み飛ばす。〈ver0.5.7.3で追加〉
+      // Excelで行の中身だけを消すと「,,,,」という行が出力される。ここで弾かないと
+      // その行数だけ「種別「」は認識できません」が並び、直しようのない警告になる。
+      // ojt.csv・rookie.csvは以前から同じ扱いのため、secret.csvだけの取りこぼしだった。
+      if (!type && !cell(r, 1) && !cell(r, 2) && !cell(r, 3) && !flagCell) return;
       // この行で優先フラグを登録できたかどうか。数値以外は登録しない（弾く）。
       let priorityRegistered = false;
       if (flagCell) {
         if (!targetNameForFlag) {
-          logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 優先フラグが入力されていますが対象1が空欄のため無視しました` });
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 優先フラグが入力されていますが対象1が空欄のため無視しました` });
         } else {
           const normalized = normalizeDigits(flagCell).trim();
           if (/^\d+$/.test(normalized)) {
             result.push({ type: 'priority_flag', name: targetNameForFlag, flag: parseInt(normalized, 10) });
             priorityRegistered = true;
           } else {
-            logs.push({ level: 'warn', message: `secret.csv ${i + 2}行目: 優先フラグ「${flagCell}」は数値として認識できません` });
+            logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 優先フラグ「${flagCell}」は数値として認識できません` });
           }
         }
       }
 
       // 座席に関する指定をこの行が1件でも作ったかどうかは、result の件数で見る。
       const countBefore = result.length;
-      parseTypeCell(r, i, type, priorityRegistered);
+      parseTypeCell(r, rowNo, type, priorityRegistered);
 
       // ---- B-9 優先フラグだけが効いてしまう行 ----
       // 〈ver0.5.7.1で判定を拡張〉ver0.5.7では「種別が空欄・誤字」の行だけを
@@ -574,7 +606,7 @@ window.SeatTool.csv = (function () {
       // 入力内容に合わせて変えるために渡す。
       if (priorityRegistered && result.length === countBefore) {
         priorityOnlyRows.push({
-          rowNumber: i + 2,
+          rowNumber: rowNo,
           name: targetNameForFlag,
           typeCell: type,
           typeKnown: KNOWN_TYPES.includes(type),
@@ -627,7 +659,7 @@ window.SeatTool.csv = (function () {
     const duplicateTrainees = new Map(); // OJT対象者名 -> 紐づいている教官名の配列
 
     dataRows.forEach((r, i) => {
-      const rowLabel = `ojt.csv ${i + 2}行目`;
+      const rowLabel = `ojt.csv ${lineNoOf(r, i)}行目`;
       const mentorName = resolve(cell(r, 0));
       const ojt1Raw = resolve(cell(r, 1));
       const ojt2Raw = resolve(cell(r, 2));
