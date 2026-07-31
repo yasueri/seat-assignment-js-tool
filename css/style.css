@@ -293,15 +293,39 @@
     font-size:15px;
   }
   #messages .empty-note{ color:var(--text-muted); }
+  /* メッセージ欄の色の凡例〈ver0.5.7で追加〉。4段階の意味を1行で示す。 */
+  .messages-legend{
+    font-size:14px;
+    color:var(--text-muted);
+    margin:-6px 0 12px;
+    line-height:1.6;
+  }
+  .messages-legend .lv-error,
+  .messages-legend .lv-violation,
+  .messages-legend .lv-warn,
+  .messages-legend .lv-info{ padding:1px 6px; border-radius:4px; }
+  .messages-legend .lv-error{ background:var(--overflow-bg); color:var(--overflow); }
+  .messages-legend .lv-violation{ background:var(--priority-bg); color:var(--priority); }
+  .messages-legend .lv-warn{ background:var(--lock-bg); color:var(--lock); }
+  .messages-legend .lv-info{ background:#E8EFFD; color:var(--accent); }
   .log-line{
     padding:9px 12px;
     border-left:3px solid var(--border);
     margin-bottom:6px;
     border-radius:3px;
     background:#F7F9FB;
+    /* 中断理由は複数行で書くため、メッセージ内の改行をそのまま表示する〈ver0.5.7〉 */
+    white-space:pre-wrap;
   }
+  /* メッセージの4段階〈ver0.5.7で violation を追加〉
+     error（赤）     … 座席表ができていない（配置を中断した）
+     violation（橙） … 座席表はできたが、置けない人・ルール違反がある
+     warn（黄）      … 読み飛ばし・注意喚起
+     info（青）      … お知らせ
+     現場への説明は「赤が出たら座席表はできていない。それ以外は座席表を見ながら確認する」 */
   .log-line.info{ border-left-color:var(--accent); }
   .log-line.warn{ border-left-color:var(--lock); background:var(--lock-bg); }
+  .log-line.violation{ border-left-color:var(--priority); background:var(--priority-bg); }
   .log-line.error{ border-left-color:var(--overflow); background:var(--overflow-bg); }
 
   .layout{
