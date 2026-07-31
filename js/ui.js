@@ -10,7 +10,7 @@
   const {
     parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
     parseRookieRows, parseSecretRows, parseOjtRows, timeToMinutes, normalizeTime, isNightShift,
-    normalizeOTKind, nameKey, displayName, preflightCsv,
+    normalizeOTKind, nameKey, displayName, preflightCsv, HEADER_SPECS,
   } = NS.csv;
   const {
     SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
@@ -305,18 +305,75 @@
     el.classList.add('empty');
   }
 
+  // ---------- 読み込み結果のまとめ表示 ----------
+  // 〈ver0.5.7.1で追加〉ファイル1つごとにメッセージ欄を書き換えていたため、
+  // まとめてドラッグ&ドロップすると、先に出したエラーが後続のファイルの表示
+  // （「バッジ表示を更新しました」など）で消えてしまっていた。ダイアログも
+  // ファイルの数だけ続けて出ていた。読み込み処理の間はここにためて、
+  // 最後に1回だけメッセージ欄とダイアログに出す。
+  let loadBatch = null;
+
+  function beginLoadBatch() { loadBatch = { logs: [], failedLabels: [], unmatched: [] }; }
+
+  // メッセージ欄への出力。まとめ表示中はためるだけにする。
+  function emitMessages(logs) {
+    if (loadBatch) { loadBatch.logs.push(...logs); return; }
+    renderMessages(logs);
+    scrollToMessages();
+  }
+
+  // 読み込めなかったファイルの記録。ダイアログはまとめ終了時に1回だけ出す。
+  function noteLoadFailure(label) {
+    if (loadBatch) { loadBatch.failedLabels.push(label); return; }
+    alert(`${label}を読み込めませんでした。\n\n`
+      + '内容は画面の「2. メッセージ」欄（赤色）に表示しています。修正してから、もう一度読み込んでください。');
+  }
+
+  // ダイアログ・メッセージに出すファイルの呼び名は HEADER_SPECS に揃える
+  function fileLabel(key) {
+    return (HEADER_SPECS[key] && HEADER_SPECS[key].label) || key;
+  }
+
+  function endLoadBatch() {
+    const batch = loadBatch;
+    loadBatch = null;
+    if (!batch) return;
+    if (batch.logs.length > 0) {
+      // 赤（読み込めなかったもの）を先頭に置く。実行時の中断と並びを揃える。
+      renderMessages([
+        ...batch.logs.filter(l => l.level === 'error'),
+        ...batch.logs.filter(l => l.level !== 'error'),
+      ]);
+      scrollToMessages();
+    }
+    // ダイアログは「読み込めていないこと」に気づかせるだけにし、詳細は
+    // メッセージ欄で読ませる（実行時の中断ダイアログと同じ考え方）。
+    const lines = [];
+    if (batch.failedLabels.length === 1) {
+      lines.push(`${batch.failedLabels[0]}を読み込めませんでした。`);
+    } else if (batch.failedLabels.length > 1) {
+      lines.push(`${batch.failedLabels.length}個のファイルを読み込めませんでした（${batch.failedLabels.join(' / ')}）。`);
+    }
+    if (batch.unmatched.length > 0) {
+      lines.push(`ファイル名から種類を判別できなかったファイルがあります（${batch.unmatched.join(' / ')}）。`);
+    }
+    if (lines.length === 0) return;
+    const where = batch.failedLabels.length > 0 ? '「2. メッセージ」欄（赤色）' : '「2. メッセージ」欄';
+    alert(`${lines.join('\n')}\n\n内容は画面の${where}に表示しています。修正してから、もう一度読み込んでください。`);
+  }
+
   // 読み込みを取り消して、そのファイルを未読み込みの状態に戻す。〈ver0.5.7で追加〉
   // ヘッダーの不一致・文字化けは全行が別の意味で読まれるため、そのまま採用すると
   // 黙って間違った座席表ができてしまう。前に読めていた内容も残さない
   // （どちらが使われているのか分からなくなるため）。
+  // なお画面の座席表はそのまま残す。まだ「作り直す」と言われていない段階のため、
+  // 表示中の座席表は正しい内容のまま（日付ラベルも一致している）。
   function rejectFile(key, messages) {
     rawText[key] = null;
     markFileFailed(key, '読み込めませんでした（下記のメッセージをご確認ください）');
     if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
-    renderMessages(messages.map(message => ({ level: 'error', message })));
-    scrollToMessages();
-    // 実行ボタンを押す前に気づいてもらう必要があるため、ダイアログも出す
-    alert(messages.join('\n\n'));
+    emitMessages(messages.map(message => ({ level: 'error', message })));
+    noteLoadFailure(fileLabel(key));
   }
 
   async function loadFileInto(key, file) {
@@ -343,6 +400,8 @@
       rawText[key] = null;
       markFileFailed(key);
       if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
+      emitMessages([{ level: 'error', message: `${fileLabel(key)}のファイルを開けませんでした。ファイルが移動・削除されていないかご確認ください。` }]);
+      noteLoadFailure(fileLabel(key));
     }
   }
 
@@ -362,12 +421,11 @@
     appState.nightExhaustive = null;
     reapplyBadges();
     render();
-    renderMessages([
+    emitMessages([
       ...secretParsed.logs,
       { level: 'info', message: 'secret.csvを読み込み、違反チェック用のルールとバッジ表示を更新しました。' },
       ...buildBadgeVisibilityLogs(),
     ]);
-    scrollToMessages();
   }
 
   // secret.csvと同様、現在読み込まれているojt.csv（rawText.ojt）から
@@ -385,12 +443,11 @@
     appState.nightExhaustive = null;
     reapplyBadges();
     render();
-    renderMessages([
+    emitMessages([
       ...ojtParsed.logs,
       { level: 'info', message: 'ojt.csvを読み込み、教官・OJTのバッジ表示を更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
       ...buildBadgeVisibilityLogs(),
     ]);
-    scrollToMessages();
   }
   // rookie.csvも同様（ver0.4.19）。読み込んだ時点で新人バッジを付け直す。
   // ※座席そのものの再配置は行わない（既存の配置を崩さないため）。
@@ -403,11 +460,10 @@
     appState.nightExhaustive = null;
     reapplyBadges();
     render();
-    renderMessages([
+    emitMessages([
       ...rookieParsed.logs,
       { level: 'info', message: 'rookie.csvを読み込み、新人のバッジ表示を更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
     ]);
-    scrollToMessages();
   }
 
 
@@ -420,14 +476,13 @@
     // 〈ver0.5.3で追加〉原因が分かるよう、読み込んだ時点でメッセージ欄に出す。
     // 1件でも使える行があれば、警告は従来どおり「自動配置を実行」時にまとめて表示する。
     if (shiftMonthly.dates.length === 0) {
-      renderMessages([
+      emitMessages([
         {
           level: 'error',
           message: '月間シフトCSVから、配置に使える行を1件も読み取れませんでした。下記の内容を元のExcelで修正し、CSVを出力し直してください。',
         },
         ...shiftMonthly.logs,
       ]);
-      scrollToMessages();
     }
   }
 
@@ -476,7 +531,10 @@
     input.addEventListener('change', async () => {
       const file = input.files[0];
       if (!file) return;
+      // ドロップ時と同じ経路にするため、1ファイルでもまとめ表示を通す。
+      beginLoadBatch();
       await loadFileInto(key, file);
+      endLoadBatch();
       input.value = ''; // 同じファイルを選び直しても change が発火するようにする
     });
   }
@@ -505,6 +563,9 @@
     const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
     if (files.length === 0) return;
 
+    // ファイル1つごとにメッセージ欄を書き換えると、先に出したエラーが
+    // 後続のファイルの表示で消えてしまう。まとめてためて最後に1回出す。〈ver0.5.7.1〉
+    beginLoadBatch();
     const unmatched = [];
     for (const file of files) {
       const key = classifyFileName(file.name);
@@ -512,8 +573,13 @@
       await loadFileInto(key, file);
     }
     if (unmatched.length > 0) {
-      alert(`ファイル名から種類を判別できませんでした: ${unmatched.join(', ')}\nファイル名に shift / rookie / secret / ojt のいずれかを含めてください。`);
+      loadBatch.unmatched.push(...unmatched);
+      loadBatch.logs.push({
+        level: 'warn',
+        message: `ファイル名から種類を判別できませんでした: ${unmatched.join(', ')}\nファイル名に shift / rookie / secret / ojt のいずれかを含めてください。`,
+      });
     }
+    endLoadBatch();
   });
 
   // ページの他の場所にファイルがドロップされた際、ブラウザがファイルを開いて
@@ -767,7 +833,7 @@
       if (secretIdx.supportSeatsMap.has(name)) held.push('要サポート');
       if (held.length < 2) continue;
       const files = [...new Set(held.map(h => ruleSourceFile[h]))].join(' / ');
-      let message = `${files}：「${name}」さんは、${held.join('と')}の両方に登録されています。`
+      let message = `${files}：「${name}」さんは、${held.join('と')}に登録されています。`
         + '固定席・要サポート・新人・OJTは、1人にどれか1つだけです。'
         + `この4つはどれも「座る席を指名する」ものなので、2つ以上あると後のほう（${held.slice(1).join('・')}）が無視されます。`;
       // 新人×固定席／要サポートのときだけ、正しい行き先を示す。
@@ -837,17 +903,29 @@
       );
     }
 
-    // ---- B-9 優先フラグだけが設定されている（種別なし） ----
+    // ---- B-9 優先フラグだけが効いてしまう行 ----
     // 種別が空欄でも優先フラグは実際に効くため、意図した固定席とは違う座席表が
     // 完成してしまう。警告は出るが、座席表を見てもその人が普通に座っているだけで、
     // 指定したつもりの席を覚えている本人以外は確認できない。
-    (secretParsed.priorityOnlyRows || []).forEach(({ rowNumber, name }) => {
+    // 〈ver0.5.7.1〉種別が正しくても対象座席などが読み取れず行ごと読み飛ばした
+    // 場合も同じ状態になるため、書き出しだけ入力内容に合わせて出し分ける。
+    // 「種別が書かれていません」と一律に出すと、実際には「固定」などと書いている
+    // 人には内容が食い違って見えてしまうため。
+    (secretParsed.priorityOnlyRows || []).forEach(({ rowNumber, name, typeCell, typeKnown }) => {
       if (!attendeeNames.has(name)) return;
+      let head;
+      if (!typeCell) {
+        head = `「${name}」さんの行は優先フラグだけが設定されていて、種別（固定席・禁止席・要サポート）が書かれていません。`;
+      } else if (!typeKnown) {
+        head = `「${name}」さんの行は種別「${typeCell}」を認識できないため、優先フラグだけが設定された状態になっています。`;
+      } else {
+        head = `「${name}」さんの行は「${typeCell}」の指定を読み取れなかったため（同じ行について黄色のメッセージが出ています）、優先フラグだけが設定された状態になっています。`;
+      }
       problems.push(
-        `secret.csv ${rowNumber}行目：「${name}」さんの行は優先フラグだけが設定されていて、種別（固定席・禁止席・要サポート）が書かれていません。\n`
+        `secret.csv ${rowNumber}行目：${head}\n`
         + '優先フラグは座席を決めるものではなく、処理の順番を早めるだけのものです。'
         + 'このままでは、この人が先にどこか空いている席に座るだけになります。\n'
-        + '種別と対象座席を書くか、優先フラグを消してください。'
+        + '種別と対象座席を正しく書くか、優先フラグを消してください。'
       );
     });
 
@@ -890,6 +968,15 @@
     if (!selectedDate) {
       alert('配置対象日を選択してください。');
       return;
+    }
+
+    // やり直しの確認は、CSVの解析・中断判定より前に行う。〈ver0.5.7.1で位置を変更〉
+    // 中断すると盤面を空に戻すため（clearBoard）、この確認を中断判定の後に置くと
+    // 「中断が起きるときだけ確認なしに盤面が消える」ことになり、誤って実行ボタンを
+    // 押したときの取り消し手段が中断の有無で変わってしまう。
+    if (hasRunOnce) {
+      const ok = confirm('手動で調整した内容は失われます。自動配置をやり直しますか？');
+      if (!ok) return;
     }
 
     // rookie.csv / secret.csv / ojt.csv はいずれも必須ではない。未読み込みの場合は
@@ -944,11 +1031,6 @@
       alert(`入力内容に問題があるため、自動配置を実行できませんでした（${blockingProblems.length}件）。\n\n`
         + '内容は画面の「2. メッセージ」欄（赤色）に表示しています。修正してから、もう一度実行してください。');
       return;
-    }
-
-    if (hasRunOnce) {
-      const ok = confirm('手動で調整した内容は失われます。自動配置をやり直しますか？');
-      if (!ok) return;
     }
 
     // 計算時間の計測開始（実際の配置計算のみを対象とし、CSVパースやバリデーションは含めない）
