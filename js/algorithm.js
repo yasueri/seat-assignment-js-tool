@@ -191,6 +191,30 @@ window.SeatTool.algorithm = (function () {
     };
   }
 
+  // 禁止席の指定により、その人が座れる座席が1つも残っていないかを判定する。
+  // 〈ver0.5.7で追加。CSV入力チェックのB-7〉
+  // 「禁止席の欄に15個書かれているか」を数えるのではなく、
+  // 「禁止席を除いた残りの中に、その人を配置できる席が1つでも残っているか」で見る。
+  // 理由は2つ。
+  //  ・座席9番は通常の自動配置では使わない例外席のため、禁止席に1〜8番と10〜15番の
+  //    14個を書くと残るのは9番だけとなり、実質ゼロになる。個数を数える方法では見逃す
+  //  ・同じ行に同じ番号を重ねて書いた場合（1 1 2 3 …）はツール側で1つにまとめるため、
+  //    書かれた個数と実際の禁止席数が一致しない
+  // 固定席・要サポートで座席9番を名指ししている場合は、その明示指定により座席9番へ
+  // 配置できるため、9番も残り席として数える。
+  // 戻り値は残っている座席キーの配列（空配列なら座れる席がゼロ）。
+  function remainingSeatKeysAfterForbidden(name, indexes) {
+    const forbidden = new Set((indexes.forbiddenSeatsMap.get(name) || []));
+    const explicit = new Set([
+      ...(indexes.designatedSeatsMap.get(name) || []),
+      ...(indexes.supportSeatsMap.get(name) || []),
+    ]);
+    return SEATS
+      .filter(s => !AUTO_PLACEMENT_EXCLUDED_SEAT_NUMBERS.has(s.number) || explicit.has(s.key))
+      .filter(s => !forbidden.has(s.key))
+      .map(s => s.key);
+  }
+
   function isForbiddenPair(a, b, forbiddenPairSet) { return forbiddenPairSet.has(pairKey(a, b)); }
 
   // 隣接禁止の「ペア」ごとにA・B・C…の記号を割り当て、各対象者には
@@ -503,7 +527,7 @@ window.SeatTool.algorithm = (function () {
           seatOjtTraineeAlone(state, seat.key, trainee);
           noteSeat9IfUsed(seat, traineeName, '教官・OJT同席（対象座席）', logs);
         } else {
-          logs.push({ level: 'error', showDialog: true, message: `${traineeName}さんを配置できません。配置ルールに矛盾がある可能性があります。` });
+          logs.push({ level: 'violation', showDialog: true, message: `${traineeName}さんを配置できません。配置ルールに矛盾がある可能性があります。` });
           overflow.push(trainee);
         }
         placedNames.add(trainee.pkey);
@@ -629,6 +653,10 @@ window.SeatTool.algorithm = (function () {
   // 隣接禁止ステップ・禁止席だけの人のステップそれぞれの直前に別途チェックする
   // ＝assignSeats内とplaceForbiddenOnlyGroup内のcountValidSeats==0チェック）。
   // ============================================================
+  // 〈ver0.5.7の補足〉下記のAとBは、CSV入力チェックのB-7・B-5が読み込んだCSVの
+  // 内容だけで先に検出し、その時点で配置を中断するようになったため、通常はここまで
+  // 到達しない（B-7は座席9番も考慮するため、Aより広い範囲を拾う）。
+  // 保存データの読み込み後など、CSVチェックを通らない経路のための保険として残している。
   function detectStaticContradictions(byName, forbiddenSeatsMap, forbiddenSeatSet, designatedSeatsMap, supportSeatsMap) {
     const problems = [];
 
@@ -743,7 +771,7 @@ window.SeatTool.algorithm = (function () {
       overflow.push(person);
     } else {
       logs.push({
-        level: 'error', showDialog: true,
+        level: 'violation', showDialog: true,
         message: `${person.name}さんを配置できません。配置ルールに矛盾がある可能性があります。secret.csvの条件を確認してください。`,
       });
       overflow.push(person);
@@ -869,7 +897,7 @@ window.SeatTool.algorithm = (function () {
     const staticProblems = detectStaticContradictions(
       byName, forbiddenSeatsMap, forbiddenSeatSet, designatedSeatsMap, supportSeatsMap
     );
-    staticProblems.forEach(message => logs.push({ level: 'error', showDialog: true, message }));
+    staticProblems.forEach(message => logs.push({ level: 'violation', showDialog: true, message }));
 
     const state = {};
     for (const s of SEATS) state[s.key] = [null, null];
@@ -991,7 +1019,7 @@ window.SeatTool.algorithm = (function () {
           // 現実には新人が同時に7人発生することは想定していないため、
           // ここに来る場合は入力データの矛盾を疑う。
           ctx.logs.push({
-            level: 'warn', showDialog: true,
+            level: 'violation', showDialog: true,
             message: `${person.name}さんの配置条件をよく確認してください（新人固定席 ${ROOKIE_DEFAULT_SEAT_ORDER.join('・')}番 のいずれにも配置できません）`,
           });
           fallbackQueue.push(person);
@@ -1029,7 +1057,7 @@ window.SeatTool.algorithm = (function () {
           noteSeat9IfUsed(seat, person.name, '固定席', ctx.logs);
         } else {
           ctx.logs.push({
-            level: 'warn', showDialog: true,
+            level: 'violation', showDialog: true,
             message: `${person.name}さんの配置条件をよく確認してください（指定された座席に配置できません）`,
           });
           // 指定席がどれもダメな場合は、通常探索にフォールバックする
@@ -1064,7 +1092,7 @@ window.SeatTool.algorithm = (function () {
           noteSeat9IfUsed(seat, person.name, '要サポート', ctx.logs);
         } else {
           ctx.logs.push({
-            level: 'warn', showDialog: true,
+            level: 'violation', showDialog: true,
             message: `${person.name}さんの配置条件をよく確認してください（要サポートで指定された座席に配置できません）`,
           });
           placeOrOverflow(person, ctx.state, forbiddenSeatSet, forbiddenPairSet, ctx.overflow, ctx.placedNames, ctx.logs, false, nightContext);
@@ -1161,7 +1189,7 @@ window.SeatTool.algorithm = (function () {
       for (const person of group) {
         if (countValidSeats(person, ctx.state, forbiddenSeatSet, forbiddenPairSet) === 0) {
           ctx.logs.push({
-            level: 'error', showDialog: true,
+            level: 'violation', showDialog: true,
             message: `${person.name}さんは、この時点で座れる座席がありません（禁止席の条件と、既に確定している他の方の座席の組み合わせにより配置不可能です）。secret.csvの条件を確認してください。`,
           });
         }
@@ -1349,7 +1377,7 @@ window.SeatTool.algorithm = (function () {
     for (const person of remaining) {
       if (countValidSeats(person, state, forbiddenSeatSet, forbiddenPairSet) === 0) {
         logs.push({
-          level: 'error', showDialog: true,
+          level: 'violation', showDialog: true,
           message: `${person.name}さんは、この時点で座れる座席がありません（禁止席・隣接禁止の条件と、既に確定している他の方の座席の組み合わせにより配置不可能です）。secret.csvの条件を確認してください。`,
         });
       }
@@ -1969,6 +1997,8 @@ window.SeatTool.algorithm = (function () {
     assignLeaderAreas, assignNightLeaders,
     buildOjtIndexes, buildRookieIndexes,
     countValidSeats, detectStaticContradictions,
+    // CSV入力チェックのB-7（座れる席がゼロ）判定用〈ver0.5.7で追加〉
+    remainingSeatKeysAfterForbidden,
     buildBaseAssignment,
     // 以下は内部関数だが、全探索backtrackやテストから使うために公開している
     seatPerson, slotOccupants, shuffle, placeOthers,

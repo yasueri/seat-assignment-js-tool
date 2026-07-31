@@ -10,7 +10,7 @@
   const {
     parseShiftMonthlyRows, rowsForDate, yearMonthLabelFromDates,
     parseRookieRows, parseSecretRows, parseOjtRows, timeToMinutes, normalizeTime, isNightShift,
-    normalizeOTKind,
+    normalizeOTKind, nameKey, displayName, preflightCsv,
   } = NS.csv;
   const {
     SEATS, seatExists, ADJACENCY, assignSeats, assignLeaderAreas, assignNightLeaders,
@@ -18,6 +18,7 @@
     overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat, buildOjtIndexes, buildRookieIndexes,
     assignSeatsWithEscalation, reshuffleForbiddenAndOthers, ADJACENT_ESCALATION_MAX_LEVEL,
+    remainingSeatKeysAfterForbidden,
   } = NS.algorithm;
 
   const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
@@ -107,7 +108,19 @@
   let dragSource = null;
   let hasRunOnce = false;
   let editingLoc = null; // 現在手入力編集中のカードの位置（null なら誰も編集していない）
-  let shiftMonthly = null; // 月間シフトCSVのパース結果 { rows, logs, dates }
+  let shiftMonthly = null; // 月間シフトCSVのパース結果 { rows, logs, dates, nameMap }
+
+  // 氏名の表記を、いま読み込まれている月間シフトCSVの表記に寄せる。〈ver0.5.6で追加〉
+  // 設定ファイル（secret.csv / ojt.csv / rookie.csv）の解析と、氏名の手入力編集で使う。
+  // 姓名の間のスペースの入れ方だけを揃えるもので、氏名そのものは書き換えない。
+  // 月間シフトCSVに無い氏名（休職者など）や未読み込みのときは、表記を整えるだけで返す
+  // （従来どおり、その氏名の指定は静かに効かない）。
+  function resolveName(raw) {
+    const disp = displayName(raw);
+    if (!disp) return '';
+    const map = shiftMonthly && shiftMonthly.nameMap;
+    return (map && map.get(nameKey(disp))) || disp;
+  }
 
   // 何度も参照するDOM要素はここでまとめて取得しておく
   const els = {
@@ -286,15 +299,35 @@
     el.textContent = `読み込み済み: ${filename}`;
     el.classList.remove('empty');
   }
-  function markFileFailed(key) {
+  function markFileFailed(key, note) {
     const el = fileStatusEls[key];
-    el.textContent = '読み込みに失敗しました';
+    el.textContent = note || '読み込みに失敗しました';
     el.classList.add('empty');
+  }
+
+  // 読み込みを取り消して、そのファイルを未読み込みの状態に戻す。〈ver0.5.7で追加〉
+  // ヘッダーの不一致・文字化けは全行が別の意味で読まれるため、そのまま採用すると
+  // 黙って間違った座席表ができてしまう。前に読めていた内容も残さない
+  // （どちらが使われているのか分からなくなるため）。
+  function rejectFile(key, messages) {
+    rawText[key] = null;
+    markFileFailed(key, '読み込めませんでした（下記のメッセージをご確認ください）');
+    if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
+    renderMessages(messages.map(message => ({ level: 'error', message })));
+    scrollToMessages();
+    // 実行ボタンを押す前に気づいてもらう必要があるため、ダイアログも出す
+    alert(messages.join('\n\n'));
   }
 
   async function loadFileInto(key, file) {
     try {
-      rawText[key] = await file.text();
+      const text = await file.text();
+      // ---- 読み込み時の中断（A-1 ヘッダー不一致 / A-2 文字化け）〈ver0.5.7で追加〉 ----
+      // secret.csv / ojt.csv / rookie.csv は「自動配置を実行」まで解析しないため、
+      // ここでチェックしないと不正なファイルに気づけるのが実行時までずれ込む。
+      const pre = preflightCsv(key, text);
+      if (!pre.ok) { rejectFile(key, pre.messages); return; }
+      rawText[key] = text;
       markFileLoaded(key, file.name);
       if (key === 'shift') refreshShiftMonthly();
       // secret.csvを（再)読み込みしたとき、既に配置が存在する場合は
@@ -307,6 +340,7 @@
       // rookie.csvも同様（ver0.4.19）
       if (key === 'rookie' && hasRunOnce) refreshRookieIndexesFromRookie();
     } catch (e) {
+      rawText[key] = null;
       markFileFailed(key);
       if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
     }
@@ -317,7 +351,7 @@
   // 再計算して画面を更新する。secret.csvが未読み込みの場合は何もしない
   // （呼び出し側でrawText.secretの有無を見て呼ぶこと）。
   function refreshRuleIndexesFromSecret() {
-    const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
+    const secretParsed = parseSecretRows(rawText.secret, seatByNumber, resolveName);
     appState.secretRows = secretParsed.rows;
     appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
     appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
@@ -340,7 +374,7 @@
   // ojtIndexesを作り直し、配置済みカードの教官・OJTバッジ表示を再計算する。
   // ※座席そのものの再配置は行わない（既存の配置を崩さないため）。
   function refreshOjtIndexesFromOjt() {
-    const ojtParsed = parseOjtRows(rawText.ojt, seatByNumber);
+    const ojtParsed = parseOjtRows(rawText.ojt, seatByNumber, resolveName);
     appState.ojtRows = ojtParsed.rows;
     appState.ojtIndexes = buildOjtIndexes(ojtParsed.rows);
     // secret.csvと同様、全探索backtrackの候補は旧ojt.csvの内容で計算済みのため無効化する。
@@ -361,7 +395,7 @@
   // rookie.csvも同様（ver0.4.19）。読み込んだ時点で新人バッジを付け直す。
   // ※座席そのものの再配置は行わない（既存の配置を崩さないため）。
   function refreshRookieIndexesFromRookie() {
-    const rookieParsed = parseRookieRows(rawText.rookie);
+    const rookieParsed = parseRookieRows(rawText.rookie, resolveName);
     appState.rookieRows = rookieParsed.rows;
     appState.rookieIndexes = buildRookieIndexes(rookieParsed.rows);
     // ojt.csvと同じ理由で候補を無効化する〈ver0.5.2〉
@@ -389,7 +423,7 @@
       renderMessages([
         {
           level: 'error',
-          message: '月間シフトCSVから、配置に使える行を1件も読み取れませんでした。列の並び（日付, 氏名, 開始時刻, 終了時刻, 前残業, 後残業, 役割）と、下記の内容をご確認ください。',
+          message: '月間シフトCSVから、配置に使える行を1件も読み取れませんでした。下記の内容を元のExcelで修正し、CSVを出力し直してください。',
         },
         ...shiftMonthly.logs,
       ]);
@@ -628,6 +662,221 @@
     return greedyFallback();
   }
 
+  // ============================================================
+  // 実行時に中断する条件（B-1〜B-9）〈ver0.5.7で追加・整理〉
+  // ============================================================
+  // 切り分けの基準は「その行が読み飛ばされたこと・指定が無視されたことに、
+  // 完成した座席表を見て気づけるか」。気づけないものは、黙って間違った座席表が
+  // 印刷されてしまうため配置そのものを止める。気づけるものは続行してメッセージに出す。
+  //
+  // 判定の対象は「選択日に出勤している人」に関するものだけに限る。出勤していない人の
+  // 設定矛盾はその日の座席表に影響せず、全員を対象にすると休職者の行が残っている
+  // だけで毎日止まってしまう。
+  //
+  // 「早番・遅番エリア／夜勤GL枠へ回る役席・GLには座席1〜15のルールが効かないので、
+  // その日は止めなくてよい」という絞り込みは行わない。バッジはCSVに書かれているか
+  // どうかだけで決まり（deriveBadgeFields）、枠へ回った人にも付けているため
+  // （reapplyLeaderBadges）、手動で座席へ動かした時点で矛盾したバッジが説明なしに
+  // 表示されてしまう。例えば種別なしの優先フラグを見逃すと、「優先」バッジだけが
+  // 単独で付いたカードができ、しかもその表示は事実と違う（手で動かした人であって、
+  // 最優先で席が決まった人ではない）。
+  // 例外はB-6の教官のみ（担当するOJT対象者が1人も出勤していない日は、教官は通常の
+  // スタッフとして配置されるため矛盾にならない。§4の「教官×固定席」と同じ扱い）。
+  //
+  // 戻り値は中断理由の文字列の配列（空なら中断しない）。
+  // 中断理由は一度に全部返す。最初の1件で打ち切ると
+  // 「直す→再実行→次のエラー」の繰り返しになるため。
+  function collectBlockingProblems(ctx) {
+    const {
+      selectedDate, skippedRows, secretParsed, ojtParsed, rookieParsed, ojtIndexes,
+      dayRows, opRows, nightOpRows, nightLeaderRows,
+    } = ctx;
+    const problems = [];
+
+    // 選択日に出勤している人（早番・遅番エリアへ回る役席・GLも含む）。B-1〜B-9の判定対象。
+    const attendeeNames = new Set(dayRows.map(r => r.name));
+    // そのうち、座席1〜15に並ぶ人。B-6（教官・OJTの優先フラグ）の判定にだけ使う。
+    // 教官・OJTの同席処理が実際に動く日かどうかを見るためで、夜勤の役席・GLは
+    // 1名が夜勤GL枠・2人目以降が座席側になるが、ここでは区別せず座席側として扱う。
+    const seatSideNames = new Set([...opRows, ...nightOpRows, ...nightLeaderRows].map(r => r.name));
+
+    // ---- B-8 選択日の行が読み飛ばされた（月間シフトCSV） ----
+    // 読み飛ばされた人は座席表から丸ごと消える。このツールには人を後から追加する
+    // 機能がないため、続行しても復旧できない。
+    // 日付そのものが読めなかった行は、どの日の勤務か判別できないため日付を問わず対象。
+    const skippedHere = (skippedRows || []).filter(r => r.date === selectedDate || r.date == null);
+    if (skippedHere.length > 0) {
+      const lines = skippedHere.map(r => {
+        const who = r.name ? `（${r.name}）` : '';
+        const undated = r.date == null ? '　※どの日の勤務か判別できないため、日付を問わず中断しています' : '';
+        return `・${r.rowNumber}行目${who}：${r.reason}${undated}`;
+      });
+      problems.push(
+        '月間シフトCSVに、読み飛ばした行があります。読み飛ばされた方は座席表から消えたまま、あとから追加することができません。\n'
+        + lines.join('\n')
+        + '\n元のExcelを修正し、CSVを出力し直してください。'
+      );
+    }
+
+    // ---- B-1 secret.csv：同じ人が同じ種別に複数行 ----
+    const secretDuplicateMessage = (kind, name) =>
+      `secret.csv：「${name}」さんが「${kind}」に複数行あります。1人1行にまとめ、複数の座席は半角または全角スペース区切りで指定してください。`;
+    [
+      ['固定席', secretParsed.duplicateDesignatedNames],
+      ['禁止席', secretParsed.duplicateForbiddenNames],
+      ['要サポート', secretParsed.duplicateSupportNames],
+    ].forEach(([kind, names]) => {
+      (names || []).filter(name => attendeeNames.has(name))
+        .forEach(name => problems.push(secretDuplicateMessage(kind, name)));
+    });
+
+    // ---- B-2 ojt.csv：同じ教官が複数行 ----
+    // 2行目以降は読み飛ばされ、そこに書かれたOJT対象者は担当教官を失う。
+    // 教官本人が休みでも、2行目のOJT対象者が出勤していれば座席表に影響する。
+    (ojtParsed.duplicateMentors || []).forEach(({ name, relatedNames }) => {
+      if (!relatedNames.some(n => attendeeNames.has(n))) return;
+      problems.push(`ojt.csv：教官「${name}」さんが複数行にあります。1名につき1行にまとめ、OJT対象者は「OJT一人目」「OJT二人目」の列に並べてください。`);
+    });
+
+    // ---- B-3 ojt.csv：同じOJT対象者が複数の教官に ----
+    (ojtParsed.duplicateTrainees || []).forEach(({ name, mentorNames }) => {
+      if (!attendeeNames.has(name)) return;
+      problems.push(`ojt.csv：OJT対象者「${name}」さんが複数の教官（${(mentorNames || []).join('・')}）に紐づいています。担当教官を1名に統一してください。`);
+    });
+
+    const secretIdx = buildSecretIndexes(secretParsed.rows);
+    const rookieNames = new Set((rookieParsed.rows || []).map(r => r.name));
+    const flagMap = secretIdx.priorityFlagMap;
+
+    // ---- B-4 座る席を指名するルールが1人に2つ以上当たっている ----
+    // 座る席を指名するルールは次の4つで、この優先順に処理される。
+    //   新人固定席 → 教官・OJT → 固定席 → 要サポート
+    // 2つ以上当たっていると、優先順位の後ろにあるルールはメッセージも出さずに消える。
+    // 「OJT対象者が本日休み」の場合と結果が見分けられないため、座席表を見て気づけない。
+    //
+    // 教官は対象に含めない。担当するOJT対象者がその日1人も出勤していなければ、
+    // 教官は通常のスタッフとして配置されるため、固定席・要サポートとの併記は矛盾ではない。
+    // 固定席の「夜勤GL席」も対象外（指名先が夜勤GL枠で、座席1〜15ではないため）。
+    // designatedSeatsMap には座席番号の指定だけが入るため、判定はそのまま使える。
+    const ruleSourceFile = { '新人': 'rookie.csv', 'OJT対象者': 'ojt.csv', '固定席': 'secret.csv', '要サポート': 'secret.csv' };
+    for (const name of attendeeNames) {
+      const held = [];
+      if (rookieNames.has(name)) held.push('新人');
+      if (ojtIndexes && ojtIndexes.isTrainee.has(name)) held.push('OJT対象者');
+      if (secretIdx.designatedSeatsMap.has(name)) held.push('固定席');
+      if (secretIdx.supportSeatsMap.has(name)) held.push('要サポート');
+      if (held.length < 2) continue;
+      const files = [...new Set(held.map(h => ruleSourceFile[h]))].join(' / ');
+      let message = `${files}：「${name}」さんは、${held.join('と')}の両方に登録されています。`
+        + '固定席・要サポート・新人・OJTは、1人にどれか1つだけです。'
+        + `この4つはどれも「座る席を指名する」ものなので、2つ以上あると後のほう（${held.slice(1).join('・')}）が無視されます。`;
+      // 新人×固定席／要サポートのときだけ、正しい行き先を示す。
+      // 示さないと、優先フラグを付けて回避しようとされてしまう。
+      if (held.includes('新人') && (held.includes('固定席') || held.includes('要サポート'))) {
+        message += '\n新人の座席を指定したい場合は、優先フラグではなく作成者にご連絡ください（対応方法をご相談します）。';
+      }
+      problems.push(message);
+    }
+
+    // ---- B-5 固定席・要サポートで指定した座席が、同じ人の禁止席にも入っている ----
+    // 論理矛盾。そのまま実行すると「指定された座席に配置できません」という
+    // 理由の分からないメッセージだけが出る。座席番号を挙げて知らせれば一発で直せる。
+    for (const name of attendeeNames) {
+      const forbidden = new Set(secretIdx.forbiddenSeatsMap.get(name) || []);
+      if (forbidden.size === 0) continue;
+      [['固定席', secretIdx.designatedSeatsMap], ['要サポート', secretIdx.supportSeatsMap]].forEach(([label, map]) => {
+        const overlap = (map.get(name) || []).filter(k => forbidden.has(k));
+        if (overlap.length === 0) return;
+        const nums = overlap.map(k => `${numberOfKey(k)}番`).join('・');
+        problems.push(`secret.csv：「${name}」さんの座席${nums}が、${label}と禁止席の両方に指定されています。どちらか一方を消してください。`);
+      });
+    }
+
+    // ---- B-6 教官・OJT対象者に優先フラグが付いている ----
+    // 優先フラグの処理は全ルールの中で最初に走るため、教官・OJTの処理に入る時点で
+    // どちらか一方が既に着席済みとなり、2人を隣り合わせられない。
+    // 教官・OJTの処理そのものが動かない日（担当するOJT対象者が全員休みなど）は、
+    // 優先フラグを付けても矛盾にならないため対象外とする。
+    const ojtRows = ojtParsed.rows || [];
+    const anyMentorOnSeatSide = ojtRows.some(r => seatSideNames.has(r.mentorName));
+    ojtRows.forEach(r => {
+      if (!flagMap.has(r.mentorName)) return;
+      if (!seatSideNames.has(r.mentorName)) return;
+      if (!r.trainees.some(t => seatSideNames.has(t))) return;
+      problems.push(
+        `secret.csv：「${r.mentorName}」さんは ojt.csv で教官として登録されていますが、優先フラグも設定されています。\n`
+        + '優先フラグを付けた人は、他のどのルールよりも先に、1人だけで席が決まります。'
+        + 'そのため教官として処理される時点では既に着席済みとなり、OJT対象者と隣り合わせることができません。'
+        + 'この状態では「担当教官が本日不在」として扱われ、OJT対象者は別の教官に振り分けられます。\n'
+        + '教官として使う場合は、優先フラグを削除してください。'
+        + '教官の座席を指定したい場合は、ojt.csv の「対象座席」列をお使いください。'
+      );
+    });
+    if (anyMentorOnSeatSide) {
+      [...new Set(ojtRows.flatMap(r => r.trainees))]
+        .filter(t => seatSideNames.has(t) && flagMap.has(t))
+        .forEach(t => {
+          const mentor = (ojtIndexes && ojtIndexes.mentorOf.get(t)) || '担当教官';
+          problems.push(
+            `secret.csv：「${t}」さんは ojt.csv でOJT対象者として登録されていますが、優先フラグも設定されています。\n`
+            + '優先フラグを付けた人は、他のどのルールよりも先に、1人だけで席が決まります。'
+            + `そのため教官（${mentor}さん）と隣り合わせることができず、教官は担当者がいないものとして配置されます。\n`
+            + '優先フラグを削除してください。'
+            + '同席する座席を指定したい場合は、ojt.csv の「対象座席」列をお使いください。'
+          );
+        });
+    }
+
+    // ---- B-7 禁止席の指定により、その日その人が座れる席がゼロになる ----
+    for (const name of attendeeNames) {
+      if (!secretIdx.forbiddenSeatsMap.has(name)) continue;
+      if (remainingSeatKeysAfterForbidden(name, secretIdx).length > 0) continue;
+      problems.push(
+        `secret.csv：「${name}」さんは禁止席の指定により、座れる座席が1つも残っていません。禁止席を減らしてください。\n`
+        + '（座席9番は、固定席・要サポートで名指ししたときだけ使う座席のため、残り席には数えていません）'
+      );
+    }
+
+    // ---- B-9 優先フラグだけが設定されている（種別なし） ----
+    // 種別が空欄でも優先フラグは実際に効くため、意図した固定席とは違う座席表が
+    // 完成してしまう。警告は出るが、座席表を見てもその人が普通に座っているだけで、
+    // 指定したつもりの席を覚えている本人以外は確認できない。
+    (secretParsed.priorityOnlyRows || []).forEach(({ rowNumber, name }) => {
+      if (!attendeeNames.has(name)) return;
+      problems.push(
+        `secret.csv ${rowNumber}行目：「${name}」さんの行は優先フラグだけが設定されていて、種別（固定席・禁止席・要サポート）が書かれていません。\n`
+        + '優先フラグは座席を決めるものではなく、処理の順番を早めるだけのものです。'
+        + 'このままでは、この人が先にどこか空いている席に座るだけになります。\n'
+        + '種別と対象座席を書くか、優先フラグを消してください。'
+      );
+    });
+
+    return problems;
+  }
+
+  // 画面の座席表を空に戻す。〈ver0.5.7で追加〉
+  // 中断したときに前回の座席表を残しておくと、古い内容のまま印刷される恐れがある。
+  function clearBoard() {
+    appState.seats = initEmptyState();
+    appState.early = initLeaderState();
+    appState.late = initLeaderState();
+    appState.overflow = [];
+    appState.nightSeats = initEmptyState();
+    appState.nightGL = initLeaderState();
+    appState.nightSpare = initLeaderState();
+    appState.nightOverflow = [];
+    appState.dayExhaustive = null;
+    appState.nightExhaustive = null;
+    appState.dayRosterNames = null;
+    appState.nightRosterNames = null;
+    appState.currentDateLabel = null;
+    appState.currentDate = null;
+    hasRunOnce = false;   // 印刷・保存も止める
+    editingLoc = null;
+    els.calcTime.textContent = '';
+    render();
+  }
+
   document.getElementById('btn-run').addEventListener('click', () => {
     if (!rawText.shift) {
       alert('月間シフトCSVを選択してください。');
@@ -646,13 +895,13 @@
     // rookie.csv / secret.csv / ojt.csv はいずれも必須ではない。未読み込みの場合は
     // 該当する処理（新人固定席・固定席や禁止席・隣接禁止のチェック・教官とOJT・要サポート）を
     // 丸ごとスキップし、通常配置のみを行う
-    const rookieParsed = rawText.rookie ? parseRookieRows(rawText.rookie) : { rows: [], logs: [] };
+    const rookieParsed = rawText.rookie ? parseRookieRows(rawText.rookie, resolveName) : { rows: [], logs: [] };
     const secretParsed = rawText.secret
-      ? parseSecretRows(rawText.secret, seatByNumber)
-      : { rows: [], logs: [], duplicateDesignatedNames: [], duplicateForbiddenNames: [], duplicateSupportNames: [] };
+      ? parseSecretRows(rawText.secret, seatByNumber, resolveName)
+      : { rows: [], logs: [], duplicateDesignatedNames: [], duplicateForbiddenNames: [], duplicateSupportNames: [], priorityOnlyRows: [] };
     const ojtParsed = rawText.ojt
-      ? parseOjtRows(rawText.ojt, seatByNumber)
-      : { rows: [], logs: [], duplicateMentorNames: [], duplicateTraineeNames: [] };
+      ? parseOjtRows(rawText.ojt, seatByNumber, resolveName)
+      : { rows: [], logs: [], duplicateMentors: [], duplicateTrainees: [] };
     const ojtIndexes = buildOjtIndexes(ojtParsed.rows);
     const dayRows = rowsForDate(shiftMonthly.rows, selectedDate);
     const { opRows, leaderRows, nightOpRows, nightLeaderRows } = splitDayRows(dayRows, ojtIndexes);
@@ -661,42 +910,40 @@
     if (!rawText.rookie) allLogs.push({ level: 'info', message: 'rookie.csvが読み込まれていないため、新人固定席は使用せず配置しました。' });
     if (!rawText.secret) allLogs.push({ level: 'info', message: 'secret.csvが読み込まれていないため、固定席・禁止席・隣接禁止・要サポート・優先フラグのルールは使用せず配置しました。' });
 
-    // 固定席・禁止席・要サポートで同じ人が複数行に分かれている場合や、ojt.csvで教官の重複・
-    // OJT対象者の担当教官重複がある場合は、配置を実行せずに知らせる
-    // （複数の座席は1行にまとめてスペース区切りで指定する仕様のため）
-    const secretDuplicateMessage = (kind, name) =>
-      `secret.csv: 「${name}」さんが「${kind}」に複数行あります。1人1行にまとめ、複数の座席は半角または全角スペース区切りで指定してください。`;
-    const dupMessages = [
-      ...(secretParsed.duplicateDesignatedNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('固定席', name) })),
-      ...(secretParsed.duplicateForbiddenNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('禁止席', name) })),
-      ...(secretParsed.duplicateSupportNames || []).map(name => ({ level: 'error', message: secretDuplicateMessage('要サポート', name) })),
-    ];
-    // ojt.csv側の重複（教官の重複・OJT対象者の担当重複）は、csv.jsが解析時に
-    // 同じ内容のエラーを既にlogsへ積んでいる。〈ver0.5.3〉ここで作り直すと同じ問題が
-    // 2件あるように見えるため、メッセージは作らず「配置を止めるか」の判定にだけ使う。
-    const ojtDuplicateCount = (ojtParsed.duplicateMentorNames || []).length
-      + (ojtParsed.duplicateTraineeNames || []).length;
-
-    // 早番・遅番エリア／夜勤GL枠へ回る役席・GLが rookie.csv に載っている場合は、
-    // 設定ミスとみなして配置を実行しない。〈ver0.5.6で追加〉
-    // これらの枠は経験を積んだ役席・GL専用で、新人が入ることはない。また新人固定席は
-    // 座席1〜15のルールのため枠側には効かず、そのまま実行しても指定が無視されるだけで
-    // 気づけない。その日のシフト上の役割（役席・GL）で判定するため、同じ人でも
-    // OPとして出勤する日は対象外になる。
+    // rookie.csv に載っている人が、その日は役席・GLとして出勤する場合。〈ver0.5.7で警告へ変更〉
+    // ver0.5.6では配置を実行しない扱いにしていたが撤回した。同じ人がOP勤務の日は
+    // 新人ルールを効かせたいのに、役席・GL勤務の日だけ止まる。中断を解除する唯一の
+    // 方法は rookie.csv の行を消すことで、そうするとOP勤務の日の新人ルールまで
+    // 失われる。つまり直し方が一つに決まらないため、止めずに理由を伝える。
     // 教官として座席側へ回る役席・GL（splitDayRowsの分岐）は座席1〜15に並ぶため対象外。
     const rookieNameSet = new Set((rookieParsed.rows || []).map(r => r.name));
-    const leaderRookieNames = [...new Set(
+    [...new Set(
       [...leaderRows, ...nightLeaderRows].map(r => r.name).filter(name => rookieNameSet.has(name))
-    )];
-    const leaderRookieMessages = leaderRookieNames.map(name => ({
-      level: 'error',
-      message: `rookie.csv: 「${name}」さんはこの日、役席・GLとして出勤するため、新人として指定できません（早番・遅番エリア／夜勤GL枠に配置されるスタッフです）。rookie.csvから該当行を削除するか、月間シフトCSVの役割をご確認ください。`,
+    )].forEach(name => allLogs.push({
+      level: 'warn',
+      message: `rookie.csv：「${name}」さんはこの日、役席・GLとして出勤するため、新人固定席は効きません（新人固定席は座席1〜15のルールで、早番・遅番エリア／夜勤GL枠には効かないため）。この日は早番・遅番エリアまたは夜勤GL枠に配置します。`,
     }));
 
-    if (dupMessages.length > 0 || ojtDuplicateCount > 0 || leaderRookieMessages.length > 0) {
-      renderMessages([...allLogs, ...dupMessages, ...leaderRookieMessages]);
+    // ---- 実行時に中断する条件（B-1〜B-9）をまとめて判定する ----
+    const blockingProblems = collectBlockingProblems({
+      selectedDate, skippedRows: shiftMonthly.skipped, secretParsed, ojtParsed, rookieParsed,
+      ojtIndexes, dayRows, opRows, nightOpRows, nightLeaderRows,
+    });
+    if (blockingProblems.length > 0) {
+      // 前回の座席表を残しておくと、古い内容のまま印刷される恐れがあるため消す
+      clearBoard();
+      // 中断理由を先頭に置く。メッセージ欄はスクロールするため、
+      // 読み飛ばし系の警告に埋もれさせない。
+      renderMessages([
+        ...blockingProblems.map(message => ({ level: 'error', message })),
+        ...allLogs,
+      ]);
       scrollToMessages();
-      return; // CSVを修正してもらうため、配置は実行しない
+      // ダイアログは「実行できていないこと」に気づかせるために1回だけ出す。
+      // 本文はコピーできず行数が多いと読み切れないため、詳細はメッセージ欄で読ませる。
+      alert(`入力内容に問題があるため、自動配置を実行できませんでした（${blockingProblems.length}件）。\n\n`
+        + '内容は画面の「2. メッセージ」欄（赤色）に表示しています。修正してから、もう一度実行してください。');
+      return;
     }
 
     if (hasRunOnce) {
@@ -1395,7 +1642,10 @@
     form.appendChild(btnRow);
 
     function save() {
-      const newName = nameInput.value.trim();
+      // 手入力の氏名も、姓名の間のスペースの入れ方を月間シフトCSVに合わせる。〈ver0.5.6〉
+      // 「山田太郎」と入力してもCSV側が「山田 太郎」ならそちらに揃うため、
+      // 固定席・新人・OJTなどのバッジやルールの再判定が効く。
+      const newName = resolveName(nameInput.value);
       const newStart = startInput.value.trim();
       const newEnd = endInput.value.trim();
 
@@ -1974,8 +2224,10 @@
       });
     });
 
+    // 違反は violation（オレンジ）。座席表そのものは出来ているため、
+    // 「座席表ができていない」を表す error（赤）とは区別する。〈ver0.5.7で変更〉
     const resultLogs = [
-      ...violations.map(m => ({ level: 'error', message: m })),
+      ...violations.map(m => ({ level: 'violation', message: m })),
       ...crossShiftWarnings.map(m => ({ level: 'warn', message: m })),
     ];
     renderMessages(resultLogs.length === 0
@@ -2148,7 +2400,13 @@
   // brokenNamesに集めて警告に使う。
   function sanitizePerson(p, brokenNames) {
     if (!p || typeof p !== 'object') return null;
-    const name = typeof p.name === 'string' ? p.name.trim() : '';
+    // 過去に保存した配置には、表記を整える前の氏名（改行・二重スペースなど）が
+    // 入っている可能性があるため、ここで表記を整える。〈ver0.5.6〉
+    // 設定ファイル側と同じ resolveName を通すのは、保存した配置を読み込んだ直後に
+    // secret.csv / ojt.csv / rookie.csv からバッジを付け直す（reapplyBadges）ため。
+    // 片方だけ月間シフトCSVの表記に寄せると、そこで氏名が食い違ってバッジが
+    // 黙って付かなくなる。変わるのはスペースの入れ方だけで、氏名自体は変わらない。
+    const name = typeof p.name === 'string' ? resolveName(p.name) : '';
     if (!name) return null;
     const start = typeof p.start === 'string' ? p.start : '';
     const end = typeof p.end === 'string' ? p.end : '';
@@ -2161,9 +2419,11 @@
     return {
       name, start, end, startMin, endMin,
       // 同日2回勤務を区別する識別子。〈ver0.4.18で追加〉
-      // 既存の保存ファイルにはpkeyが無いため、氏名＋開始時刻から補完する
-      // （csv.js側と同じ組み立て方のため、同じ値になる）。
-      pkey: typeof p.pkey === 'string' && p.pkey ? p.pkey : `${name}|${start}`,
+      // pkeyは常に「氏名|開始時刻」で作られるため、保存されている値は使わず
+      // 表記を整えた氏名から作り直す。〈ver0.5.6で変更〉保存されている値をそのまま
+      // 使うと、氏名だけ表記を整えた場合にpkeyと氏名が食い違い、手入力編集の
+      // 二重配置チェック（isPersonUsedElsewhere）が働かなくなるため。
+      pkey: `${name}|${start}`,
       // 残業の種別（'' / 'OP' / 'GL'）。〈ver0.5.5〉
       // 壊れた保存ファイルで想定外の値が入っていても、normalizeOTKind が
       // 「残業なし」に丸めるため、誤った記号が紙に出ることはない。
@@ -2340,7 +2600,7 @@
     // secret.csvを読み込んだ時点で自動的に反映される（loadFileInto内のフック）。
     let secretNote;
     if (rawText.secret) {
-      const secretParsed = parseSecretRows(rawText.secret, seatByNumber);
+      const secretParsed = parseSecretRows(rawText.secret, seatByNumber, resolveName);
       appState.secretRows = secretParsed.rows;
       appState.ruleIndexes = buildSecretIndexes(secretParsed.rows);
       appState.adjacentGroupLetters = buildAdjacentGroups(secretParsed.rows);
@@ -2357,7 +2617,7 @@
     // 保存ファイルには含まれていないため、同様にその場のojt.csvから作り直す
     let ojtNote = null;
     if (rawText.ojt) {
-      const ojtParsed = parseOjtRows(rawText.ojt, seatByNumber);
+      const ojtParsed = parseOjtRows(rawText.ojt, seatByNumber, resolveName);
       appState.ojtRows = ojtParsed.rows;
       appState.ojtIndexes = buildOjtIndexes(ojtParsed.rows);
       ojtNote = { level: 'info', message: '読み込み済みのojt.csvから、教官・OJTのバッジ表示を構築しました。' };
@@ -2369,7 +2629,7 @@
     // 正として付け直し、未読み込みなら保存ファイルが持っている内容を維持する。
     let rookieNote = null;
     if (rawText.rookie) {
-      const rookieParsed = parseRookieRows(rawText.rookie);
+      const rookieParsed = parseRookieRows(rawText.rookie, resolveName);
       appState.rookieRows = rookieParsed.rows;
       appState.rookieIndexes = buildRookieIndexes(rookieParsed.rows);
       rookieNote = { level: 'info', message: '読み込み済みのrookie.csvから、新人のバッジ表示を構築しました。' };
@@ -2647,6 +2907,12 @@
   }
 
   document.getElementById('btn-print').addEventListener('click', () => {
+    // 座席表ができていないときは印刷させない。〈ver0.5.7で追加〉
+    // 中断すると盤面を空に戻すため、そのまま印刷すると白紙の座席表が出てしまう。
+    if (!hasRunOnce) {
+      alert('印刷できる座席表がありません。先に「自動配置を実行」するか、保存した配置を読み込んでください。');
+      return;
+    }
     const today = new Date();
     const pad = n => String(n).padStart(2, '0');
     const todayLabel = `${today.getFullYear()}年${pad(today.getMonth() + 1)}月${pad(today.getDate())}日`;
