@@ -325,8 +325,17 @@
   // ファイルの数だけ続けて出ていた。読み込み処理の間はここにためて、
   // 最後に1回だけメッセージ欄とダイアログに出す。
   let loadBatch = null;
+  // 読み込み処理が同時に何本走っているか。〈ver0.5.7.3で追加〉
+  // loadFileInto は非同期のため、読み込み中にもう一度ドラッグ&ドロップされると
+  // beginLoadBatch が2回走り、先に終わったほうが両方分をまとめて出したうえで
+  // loadBatch を空にしてしまい、後から終わったファイルのメッセージが消えていた。
+  // 深さを数えて、最後の1本が終わったときにだけまとめて出す。
+  let loadBatchDepth = 0;
 
-  function beginLoadBatch() { loadBatch = { logs: [], failedLabels: [], unmatched: [] }; }
+  function beginLoadBatch() {
+    loadBatchDepth++;
+    if (!loadBatch) loadBatch = { logs: [], failedLabels: [], loadedLabels: [], unmatched: [] };
+  }
 
   // メッセージ欄への出力。まとめ表示中はためるだけにする。
   function emitMessages(logs) {
@@ -342,19 +351,36 @@
       + '内容は画面の「2. メッセージ」欄（赤色）に表示しています。修正してから、もう一度読み込んでください。');
   }
 
+  // 読み込めたファイルの記録。〈ver0.5.7.3で追加〉
+  function noteLoadSuccess(label) {
+    if (loadBatch) loadBatch.loadedLabels.push(label);
+  }
+
   // ダイアログ・メッセージに出すファイルの呼び名は HEADER_SPECS に揃える
   function fileLabel(key) {
     return (HEADER_SPECS[key] && HEADER_SPECS[key].label) || key;
   }
 
   function endLoadBatch() {
+    loadBatchDepth = Math.max(0, loadBatchDepth - 1);
+    if (loadBatchDepth > 0) return; // まだ読み込み中のファイルがある
     const batch = loadBatch;
     loadBatch = null;
     if (!batch) return;
-    if (batch.logs.length > 0) {
+    // 〈ver0.5.7.3で変更〉読み込みが終わったら、メッセージ欄を必ず描き直す。
+    // ver0.5.7.2までは出すものが1件も無いと描き直していなかったため、弾かれた
+    // ファイルを直して読み込み直しても、前回の赤いエラーがそのまま残っていた。
+    // 「読み込み済み」の表示と画面のメッセージが食い違い、直ったのかどうかが
+    // 分からない状態になる。読み込めたファイル名を必ず1行出して打ち消す。
+    if (batch.logs.length > 0 || batch.loadedLabels.length > 0) {
+      const loadedLogs = batch.loadedLabels.length > 0
+        ? [{ level: 'info', message: `${batch.loadedLabels.join(' / ')}を読み込みました。` }]
+        : [];
       // 赤（読み込めなかったもの）を先頭に置く。実行時の中断と並びを揃える。
+      // 読み込めたファイルの行はその次に置き、残りの警告・お知らせを続ける。
       renderMessages([
         ...batch.logs.filter(l => l.level === 'error'),
+        ...loadedLogs,
         ...batch.logs.filter(l => l.level !== 'error'),
       ]);
       scrollToMessages();
@@ -401,6 +427,7 @@
       rawText[key] = text;
       rejectedFiles.delete(key); // 読み直して通ったので、弾いた記録は消す〈ver0.5.7.2〉
       markFileLoaded(key, file.name);
+      noteLoadSuccess(fileLabel(key));
       if (key === 'shift') refreshShiftMonthly();
       // secret.csvを（再)読み込みしたとき、既に配置が存在する場合は
       // 違反チェック用のルール（ruleIndexes）と、配置済みカードのバッジ表示を
@@ -439,7 +466,7 @@
     render();
     emitMessages([
       ...secretParsed.logs,
-      { level: 'info', message: 'secret.csvを読み込み、違反チェック用のルールとバッジ表示を更新しました。' },
+      { level: 'info', message: '違反チェック用のルールとバッジ表示を、いまのsecret.csvで更新しました。' },
       ...buildBadgeVisibilityLogs(),
     ]);
   }
@@ -461,7 +488,7 @@
     render();
     emitMessages([
       ...ojtParsed.logs,
-      { level: 'info', message: 'ojt.csvを読み込み、教官・OJTのバッジ表示を更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
+      { level: 'info', message: '教官・OJTのバッジ表示を、いまのojt.csvで更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
       ...buildBadgeVisibilityLogs(),
     ]);
   }
@@ -478,7 +505,7 @@
     render();
     emitMessages([
       ...rookieParsed.logs,
-      { level: 'info', message: 'rookie.csvを読み込み、新人のバッジ表示を更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
+      { level: 'info', message: '新人のバッジ表示を、いまのrookie.csvで更新しました（既存の座席配置は変更していません。反映するには自動配置をやり直してください）。' },
     ]);
   }
 
@@ -557,9 +584,14 @@
       const file = input.files[0];
       if (!file) return;
       // ドロップ時と同じ経路にするため、1ファイルでもまとめ表示を通す。
+      // 途中で例外が出てもまとめを必ず閉じる（閉じ忘れると、以降の読み込みで
+      // メッセージが1件も出なくなってしまうため）。〈ver0.5.7.3〉
       beginLoadBatch();
-      await loadFileInto(key, file);
-      endLoadBatch();
+      try {
+        await loadFileInto(key, file);
+      } finally {
+        endLoadBatch();
+      }
       input.value = ''; // 同じファイルを選び直しても change が発火するようにする
     });
   }
@@ -591,20 +623,23 @@
     // ファイル1つごとにメッセージ欄を書き換えると、先に出したエラーが
     // 後続のファイルの表示で消えてしまう。まとめてためて最後に1回出す。〈ver0.5.7.1〉
     beginLoadBatch();
-    const unmatched = [];
-    for (const file of files) {
-      const key = classifyFileName(file.name);
-      if (!key) { unmatched.push(file.name); continue; }
-      await loadFileInto(key, file);
+    try {
+      const unmatched = [];
+      for (const file of files) {
+        const key = classifyFileName(file.name);
+        if (!key) { unmatched.push(file.name); continue; }
+        await loadFileInto(key, file);
+      }
+      if (unmatched.length > 0) {
+        loadBatch.unmatched.push(...unmatched);
+        loadBatch.logs.push({
+          level: 'warn',
+          message: `ファイル名から種類を判別できませんでした: ${unmatched.join(', ')}\nファイル名に shift / rookie / secret / ojt のいずれかを含めてください。`,
+        });
+      }
+    } finally {
+      endLoadBatch();
     }
-    if (unmatched.length > 0) {
-      loadBatch.unmatched.push(...unmatched);
-      loadBatch.logs.push({
-        level: 'warn',
-        message: `ファイル名から種類を判別できませんでした: ${unmatched.join(', ')}\nファイル名に shift / rookie / secret / ojt のいずれかを含めてください。`,
-      });
-    }
-    endLoadBatch();
   });
 
   // ページの他の場所にファイルがドロップされた際、ブラウザがファイルを開いて
@@ -907,11 +942,19 @@
       [...new Set(ojtRows.flatMap(r => r.trainees))]
         .filter(t => seatSideNames.has(t) && flagMap.has(t))
         .forEach(t => {
-          const mentor = (ojtIndexes && ojtIndexes.mentorOf.get(t)) || '担当教官';
+          // 〈ver0.5.7.3で変更〉担当教官が本日いない場合、この人は別の教官へ
+          // 振り分けられる（algorithm.jsのassignMentorOjt）。それでも優先フラグが
+          // 先に効くため同席はできないが、本来の担当教官の名前を出すと
+          // 「その人は今日休みでは？」と読み手が混乱するため、書き分ける。
+          const ownMentor = ojtIndexes && ojtIndexes.mentorOf.get(t);
+          const ownMentorOnSeatSide = !!ownMentor && seatSideNames.has(ownMentor);
+          const conflict = ownMentorOnSeatSide
+            ? `そのため教官（${ownMentor}さん）と隣り合わせることができず、教官は担当者がいないものとして配置されます。`
+            : `そのため教官と隣り合わせることができません（担当教官の${ownMentor ? `${ownMentor}さん` : '方'}が本日不在のため、本来は別の教官へ振り分けられる方です）。`;
           problems.push(
             `secret.csv：「${t}」さんは ojt.csv でOJT対象者として登録されていますが、優先フラグも設定されています。\n`
             + '優先フラグを付けた人は、他のどのルールよりも先に、1人だけで席が決まります。'
-            + `そのため教官（${mentor}さん）と隣り合わせることができず、教官は担当者がいないものとして配置されます。\n`
+            + `${conflict}\n`
             + '優先フラグを削除してください。'
             + '同席する座席を指定したい場合は、ojt.csv の「対象座席」列をお使いください。'
           );
