@@ -106,7 +106,12 @@
 
 <div class="panel" id="messages-panel">
   <h2><span class="step-num">2</span>メッセージ</h2>
-  <p class="messages-legend"><b class="lv-error">赤</b>が出たら<b>座席表はできていません</b>（入力を直して実行し直してください）。<b class="lv-violation">オレンジ</b>＝座席表はできたが置けない人・ルール違反あり／<b class="lv-warn">黄</b>＝読み飛ばし・注意／<b class="lv-info">青</b>＝お知らせ。オレンジ以下は座席表を見ながらご確認ください。</p>
+  <details class="help legend-toggle">
+    <summary>色の意味（赤・オレンジ・黄・青）</summary>
+    <div class="help-content">
+      <p class="messages-legend"><b class="lv-error">赤</b>が出たら<b>座席表はできていません</b>（入力を直して実行し直してください）。<b class="lv-violation">オレンジ</b>＝座席表はできたが置けない人・ルール違反あり／<b class="lv-warn">黄</b>＝読み飛ばし・注意／<b class="lv-info">青</b>＝お知らせ。オレンジ以下は座席表を見ながらご確認ください。</p>
+    </div>
+  </details>
   <div id="messages"><div class="empty-note">まだ配置は実行されていません。</div></div>
 </div>
 
