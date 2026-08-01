@@ -741,12 +741,45 @@ window.SeatTool.csv = (function () {
       result.push({ mentorName, trainees, seatOrder });
     });
 
+    // ---- 同じ人が「教官」と「OJT対象者」の両方に書かれている行の検出 ----
+    // 〈ver0.5.7.4で追加。B-10〉
+    // 同じ行の中で教官名＝OJT対象者になっている場合は上で読み飛ばしているが、
+    // 行をまたぐ場合（例: 1行目の教官が、2行目のOJT二人目に書かれている）は
+    // これまで素通りしていた。その人は教官としての同席で1席、OJT対象者としての
+    // 同席でもう1席を占め、同じ方のカードが座席表に2枚できてしまう
+    // （ver0.4.0で廃止した二重配置。警告も出ないため画面を見るまで気づけない）。
+    // ここでは検出するだけで、メッセージは呼び出し側（ui.js）が作る
+    // （duplicateMentors / duplicateTrainees と同じく、選択日に出勤している人に
+    // 関するものだけを中断する判定が、選択日の決まった後でなければできないため）。
+    const mentorTraineeConflicts = [];
+    {
+      const mentorRowOf = new Map(); // nameKey -> 受け入れた行
+      result.forEach(r => { mentorRowOf.set(nameKey(r.mentorName), r); });
+      const asTrainee = new Map(); // nameKey -> { name, mentorNames:Set }
+      result.forEach(r => r.trainees.forEach(t => {
+        const k = nameKey(t);
+        if (!asTrainee.has(k)) asTrainee.set(k, { name: t, mentorNames: new Set() });
+        asTrainee.get(k).mentorNames.add(r.mentorName);
+      }));
+      for (const [k, info] of asTrainee.entries()) {
+        const mentorRow = mentorRowOf.get(k);
+        if (!mentorRow) continue;
+        mentorTraineeConflicts.push({
+          name: mentorRow.mentorName,                 // 月間シフトCSVに揃えた表記
+          traineeNames: mentorRow.trainees.slice(),   // その人が教官として担当する対象者
+          mentorNames: Array.from(info.mentorNames),  // その人を対象者として担当する教官
+        });
+      }
+    }
+
     return {
       rows: result,
       logs,
       // 〈ver0.5.7で形を変更〉氏名の配列から、関係者つきの一覧に変更した。
       duplicateMentors: Array.from(duplicateMentors, ([name, related]) => ({ name, relatedNames: Array.from(related) })),
       duplicateTrainees: Array.from(duplicateTrainees, ([name, mentors]) => ({ name, mentorNames: Array.from(mentors) })),
+      // 教官とOJT対象者の兼務〈ver0.5.7.4で追加。B-10〉
+      mentorTraineeConflicts,
     };
   }
 

@@ -972,6 +972,42 @@
         });
     }
 
+    // ---- B-10 ojt.csv：同じ人が「教官」と「OJT対象者」の両方に書かれている ----
+    // 〈ver0.5.7.4で追加〉行をまたぐ兼務はこれまで検出できていなかった。
+    // その人は教官としての同席で1席、OJT対象者としての同席でもう1席を占めるため、
+    // 同じ方のカードが座席表に2枚できる（ver0.4.0で廃止した二重配置）。
+    // 警告も出ないため、印刷して配ってから気づくことになる。
+    (ojtParsed.mentorTraineeConflicts || []).forEach(({ name, traineeNames, mentorNames }) => {
+      if (!attendeeNames.has(name)) return;
+      const asMentor = (traineeNames || []).length > 0 ? (traineeNames || []).join('・') : '（記載なし）';
+      problems.push(
+        `ojt.csv：「${name}」さんが、教官（担当するOJT対象者: ${asMentor}）としても、`
+        + `OJT対象者（担当教官: ${(mentorNames || []).join('・')}）としても書かれています。\n`
+        + '同じ方が両方に書かれていると、教官としての同席で1席、OJT対象者としての同席でもう1席を占めるため、'
+        + '同じ方のカードが座席表に2枚できてしまいます。\n'
+        + 'どちらか一方の行を修正してください（OJTを卒業して教官になった場合は、対象者として書かれている行を消してください）。'
+      );
+    });
+
+    // ---- B-11 ojt.csv の教官が rookie.csv にも登録されている ----
+    // 〈ver0.5.7.4で追加〉B-6（教官に優先フラグ）とまったく同じ機序。
+    // 新人固定席は教官・OJTより先に処理されるため、教官が先に着席してしまい、
+    // 教官・OJTの処理に入る時点で「担当教官が本日不在」として扱われる。
+    // 出勤しているのに不在と表示されるうえ、OJT対象者は別の教官へ振り分けられる。
+    // 中断するのは、B-6と同じく「教官・OJTの処理が実際に動く日」だけに限る。
+    ojtRows.forEach(r => {
+      if (!rookieNames.has(r.mentorName)) return;
+      if (!seatSideNames.has(r.mentorName)) return;
+      if (!r.trainees.some(t => seatSideNames.has(t))) return;
+      problems.push(
+        `rookie.csv / ojt.csv：「${r.mentorName}」さんは ojt.csv で教官として登録されていますが、rookie.csv にも登録されています。\n`
+        + '新人固定席は教官・OJTより先に処理されるため、教官として処理される時点では既に着席済みとなり、OJT対象者と隣り合わせることができません。'
+        + 'この状態では「担当教官がこの座席表にいない」として扱われ、OJT対象者は別の教官に振り分けられます（実際には出勤しているため、表示とも食い違います）。\n'
+        + '教官として使う場合は、rookie.csv からこの方の行を削除してください。'
+        + '教官の座席を指定したい場合は、ojt.csv の「対象座席」列をお使いください。'
+      );
+    });
+
     // ---- B-7 禁止席の指定により、その日その人が座れる席がゼロになる ----
     for (const name of attendeeNames) {
       if (!secretIdx.forbiddenSeatsMap.has(name)) continue;
@@ -1089,7 +1125,7 @@
       : { rows: [], logs: [], duplicateDesignatedNames: [], duplicateForbiddenNames: [], duplicateSupportNames: [], priorityOnlyRows: [] };
     const ojtParsed = rawText.ojt
       ? parseOjtRows(rawText.ojt, seatByNumber, resolveName)
-      : { rows: [], logs: [], duplicateMentors: [], duplicateTrainees: [] };
+      : { rows: [], logs: [], duplicateMentors: [], duplicateTrainees: [], mentorTraineeConflicts: [] };
     const ojtIndexes = buildOjtIndexes(ojtParsed.rows);
     const dayRows = rowsForDate(shiftMonthly.rows, selectedDate);
     const { opRows, leaderRows, nightOpRows, nightLeaderRows } = splitDayRows(dayRows, ojtIndexes);
@@ -1126,7 +1162,44 @@
       message: `rookie.csv：「${name}」さんはこの日、役席・GLとして出勤するため、新人固定席は効きません（新人固定席は座席1〜15のルールで、早番・遅番エリア／夜勤GL枠には効かないため）。この日は早番・遅番エリアまたは夜勤GL枠に配置します。`,
     }));
 
-    // ---- 実行時に中断する条件（B-1〜B-9）をまとめて判定する ----
+    // 教官とOJT対象者が、日勤側と夜勤側に分かれて出勤する日。〈ver0.5.7.4で追加〉
+    // 日勤と夜勤は座席表が完全に別物のため、この2人は同席できない。実際には
+    // 夜勤側の別の教官へ自動的に振り分けられる（algorithm.jsのassignMentorOjt）。
+    //
+    // 運用上、夜勤勤務予定の方がOJTだけ日中に行うことがあり、その日は対象者も
+    // 日勤側に来るためここには引っかからない。逆に、対象者が夜勤側に来ている
+    // ＝勤務時間そのものが夜勤に移っているということなので、本来は
+    //   ・夜勤の教官とペアを組み直す
+    //   ・rookie.csv に移す（夜勤特有の運用であれば secret.csv の固定席）
+    // のいずれかへ切り替える段階にある。つまりCSVの更新忘れの可能性が高い。
+    // ただし「その日は振り分け先の教官で回す」という判断もあり得るため、中断はしない。
+    const daySideNames = new Set([...opRows, ...leaderRows].map(r => r.name));
+    const nightSideNames = new Set([...nightOpRows, ...nightLeaderRows].map(r => r.name));
+    const shiftsOf = (name) => dayRows.filter(r => r.name === name);
+    const timeLabelOf = (name) => shiftsOf(name).map(r => `${r.start}-${r.end}`).join(' / ') || '時間不明';
+    const overlapsAny = (a, b) => a.some(x => b.some(y => x.startMin < y.endMin && y.startMin < x.endMin));
+    (ojtParsed.rows || []).forEach(r => {
+      r.trainees.forEach(t => {
+        const split = (daySideNames.has(r.mentorName) && nightSideNames.has(t))
+          || (nightSideNames.has(r.mentorName) && daySideNames.has(t));
+        if (!split) return;
+        const mentorSide = daySideNames.has(r.mentorName) ? '日勤' : '夜勤';
+        const traineeSide = mentorSide === '日勤' ? '夜勤' : '日勤';
+        const overlapped = overlapsAny(shiftsOf(r.mentorName), shiftsOf(t));
+        const tail = overlapped
+          ? 'お二人の勤務時間は重なっていますが、日勤側と夜勤側で座席表が分かれるため同席はできません。意図した配置かご確認ください。'
+          : 'お二人の勤務時間は重なっておらず、この組み合わせでのOJTは成立しません。ojt.csvの更新忘れの可能性があります。'
+            + '夜勤の教官とペアを組み直すか、rookie.csv（夜勤特有の運用であれば secret.csv の固定席）へ切り替えてください。';
+        allLogs.push({
+          level: 'warn',
+          message: `ojt.csv：教官「${r.mentorName}」さん（${mentorSide}／${timeLabelOf(r.mentorName)}）と`
+            + `OJT対象者「${t}」さん（${traineeSide}／${timeLabelOf(t)}）が、日勤側と夜勤側に分かれています。`
+            + `${t}さんは${traineeSide}側の別の教官へ振り分けるか、教官なしで配置します。${tail}`,
+        });
+      });
+    });
+
+    // ---- 実行時に中断する条件（B-1〜B-11）をまとめて判定する ----
     const blockingProblems = collectBlockingProblems({
       selectedDate, skippedRows: shiftMonthly.skipped, secretParsed, ojtParsed, rookieParsed,
       ojtIndexes, dayRows, opRows, nightOpRows, nightLeaderRows,
@@ -2315,6 +2388,13 @@
           } else {
             violations.push(`${label}${numberOfKey(s.key)}番の座席で、勤務時間が重なる${a.name}さんと${b.name}さんが同席しています`);
           }
+        }
+
+        // ルール1: 隣接禁止（同じ座席に2人）。〈ver0.5.7.4で追加〉
+        // ADJACENCYは自分の席を含まないため、下の隣接チェックでは拾えない。
+        // 隣の席がだめで同じ机ならよい、ということはないため、こちらも違反とする。
+        if (occHere.length === 2 && isForbiddenPair(occHere[0].name, occHere[1].name, forbiddenPairSet)) {
+          violations.push(`${label}${numberOfKey(s.key)}番の座席で、隣接禁止の${occHere[0].name}さんと${occHere[1].name}さんが同席しています`);
         }
 
         // ルール1: 隣接禁止（同じペアを2回報告しないようにする）
