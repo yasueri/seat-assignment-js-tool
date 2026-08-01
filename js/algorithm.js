@@ -388,6 +388,9 @@ window.SeatTool.algorithm = (function () {
     if (slotOccupants(state[seat.key]).length > 0) return false;
     if (forbiddenSeatSet.has(`${personA.name}|${seat.key}`)) return false;
     if (forbiddenSeatSet.has(`${personB.name}|${seat.key}`)) return false;
+    // 同席する2人どうしが隣接禁止の相手なら同席させない。〈ver0.5.7.4で追加〉
+    // 隣の席がだめで同じ机ならよい、ということはないため（canPlace側と同じ考え方）。
+    if (isForbiddenPair(personA.name, personB.name, forbiddenPairSet)) return false;
     for (const adjKey of ADJACENCY[seat.key]) {
       for (const occ of slotOccupants(state[adjKey])) {
         if (isForbiddenPair(personA.name, occ.name, forbiddenPairSet)) return false;
@@ -509,9 +512,13 @@ window.SeatTool.algorithm = (function () {
         && (effectiveTrainees.get(e.mentorName).length + orphanGroup.ownTrainees.length) <= 2);
       if (backup) {
         effectiveTrainees.get(backup.mentorName).push(...orphanGroup.ownTrainees);
+        // 〈ver0.5.7.4で文言を変更〉「本日不在」と書いていたが、日勤・夜勤で座席表が
+        // 分かれるため、教官が反対側（例: 教官が日勤・対象者が夜勤）に出勤している場合も
+        // ここに来る。その場合「不在」は事実と違うため、この座席表にいない、という
+        // 言い方に改めた（ui.js側で【日勤】【夜勤】の接頭辞が付く）。
         logs.push({
           level: 'info',
-          message: `${orphanGroup.ownTrainees.join('さん、')}さんの担当教官（${orphanGroup.mentorName}さん）が本日不在のため、${backup.mentorName}さんが代わりに担当します。`,
+          message: `${orphanGroup.ownTrainees.join('さん、')}さんの担当教官（${orphanGroup.mentorName}さん）がこの座席表にいないため、${backup.mentorName}さんが代わりに担当します。`,
         });
         return;
       }
@@ -532,7 +539,7 @@ window.SeatTool.algorithm = (function () {
         }
         placedNames.add(trainee.pkey);
       });
-      logs.push({ level: 'warn', message: `${orphanGroup.ownTrainees.join('さん、')}さんの担当教官（${orphanGroup.mentorName}さん）が本日不在で、代わりに担当できる教官も見つからなかったため、OJT対象者のみで配置しました。手動で臨時教官を割り当ててください。` });
+      logs.push({ level: 'warn', message: `${orphanGroup.ownTrainees.join('さん、')}さんの担当教官（${orphanGroup.mentorName}さん）がこの座席表におらず、代わりに担当できる教官も見つからなかったため、OJT対象者のみで配置しました。手動で臨時教官を割り当ててください。` });
     });
 
     // ---- 2.5th pass: 教官2名・OJT2名のときの組み替え（ver0.4.16で追加） ----
@@ -564,6 +571,22 @@ window.SeatTool.algorithm = (function () {
     const oneTraineeEntries = entries.filter(e => e.available && (effectiveTrainees.get(e.mentorName) || []).length === 1);
     const orderedEntries = [...twoTraineeEntries, ...oneTraineeEntries];
 
+    // 教官・OJT対象者どうしに隣接禁止が設定されている組み合わせを洗い出す。
+    // 〈ver0.5.7.4で追加〉
+    // 教官＋OJT一人目は「同じ座席」、OJT二人目は「その隣の座席」と配置先が構造的に
+    // 決まっているため、この3人の間の隣接禁止は候補を選び直しても避けられない
+    // （ペア候補OJT_PAIR_*はすべて隣接席のため）。したがってここは
+    // 「探し直して解決する」対象ではなく「知らせる」対象として扱う。
+    function forbiddenPairsAmong(names) {
+      const out = [];
+      for (let i = 0; i < names.length; i++) {
+        for (let j = i + 1; j < names.length; j++) {
+          if (isForbiddenPair(names[i], names[j], forbiddenPairSet)) out.push([names[i], names[j]]);
+        }
+      }
+      return out;
+    }
+
     for (const e of orderedEntries) {
       const traineeNames = effectiveTrainees.get(e.mentorName) || [];
       const mentor = e.mentor;
@@ -571,13 +594,33 @@ window.SeatTool.algorithm = (function () {
       const seatOrder = ojtIndexes.seatOrderOf.get(mentorName) || [];
       const singleOrder = ojtSingleSeatOrder(seatOrder);
 
+      // ---- 教官・OJT対象者どうしの隣接禁止〈ver0.5.7.4で追加〉----
+      // sharedBlocked（教官とOJT一人目が隣接禁止）は同じ座席に座らせることになるため、
+      // 同席そのものをあきらめて個別配置に切り替える（canPlaceSharedSeatも同席を拒む）。
+      // それ以外（OJT一人目と二人目、教官とOJT二人目）は隣の座席どうしの話で、
+      // 同席をやめても隣接は避けられないため、教官・OJTの同席を優先してそのまま配置し、
+      // 「置けたがルールを満たしていない」ことをオレンジ（violation）で知らせる。
+      const conflicts = forbiddenPairsAmong([mentorName, ...traineeNames]);
+      const sharedBlocked = traineeNames.length > 0
+        && isForbiddenPair(mentorName, traineeNames[0], forbiddenPairSet);
+      if (conflicts.length > 0) {
+        const pairText = conflicts.map(([a, b]) => `${a}さんと${b}さん`).join('、');
+        logs.push({
+          level: 'violation',
+          message: sharedBlocked
+            ? `${pairText}は隣接禁止に指定されていますが、教官とOJT一人目は同じ座席に同席する決まりのため、両立できません。同席をやめて個別に配置しました。ojt.csvの組み合わせか、secret.csvの隣接禁止のどちらかを見直してください。`
+            : `${pairText}は隣接禁止に指定されていますが、教官・OJTの同席は「教官＋OJT一人目の座席」と「その隣のOJT二人目の座席」に固定されているため、両立できません。同席を優先して隣り合う座席に配置しています。ojt.csvの組み合わせか、secret.csvの隣接禁止のどちらかを見直してください。`,
+        });
+      }
+
       if (traineeNames.length === 1) {
         const trainee = byName.get(traineeNames[0]);
         // 既定順（15→12→8→4→3→2→1→他）で探す。ver0.4.15までは、既に配置済みの
         // 教官1名・OJT2名の座席の同列1つ前を追加候補として試していたが、
         // ver0.4.16で既定順そのものを1番まで伸ばしたため、この追加候補は廃止した。
-        const seat = findSharedSeatInOrder(singleOrder, mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet, true)
-          || findSharedSeatAnywhere(mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet);
+        const seat = sharedBlocked ? null : (
+          findSharedSeatInOrder(singleOrder, mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet, true)
+          || findSharedSeatAnywhere(mentor, trainee, state, forbiddenSeatSet, forbiddenPairSet));
         if (seat) {
           seatPersonPair(state, seat.key, mentor, trainee);
           placedNames.add(mentor.pkey);
@@ -585,7 +628,10 @@ window.SeatTool.algorithm = (function () {
           noteSeat9IfUsed(seat, mentorName, '教官・OJT同席（対象座席）', logs);
         } else {
           // 15席すべて埋まっている等、極めて稀なケース。教官・OJTをそれぞれ独立に配置する
-          logs.push({ level: 'warn', message: `${mentorName}さんと${traineeNames[0]}さんを同席させる座席が見つからなかったため、それぞれ個別に配置しました。` });
+          // （sharedBlockedの場合は上でオレンジのメッセージを出しているため重ねて出さない）
+          if (!sharedBlocked) {
+            logs.push({ level: 'warn', message: `${mentorName}さんと${traineeNames[0]}さんを同席させる座席が見つからなかったため、それぞれ個別に配置しました。` });
+          }
           placeOrOverflow(mentor, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, false);
           placeOrOverflow(trainee, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, false);
         }
@@ -593,7 +639,8 @@ window.SeatTool.algorithm = (function () {
         const trainee1 = byName.get(traineeNames[0]);
         const trainee2 = byName.get(traineeNames[1]);
         const pairOrder = ojtPairOrder(seatOrder);
-        const pair = findOjtPairInOrder(pairOrder, mentor, trainee1, trainee2, state, forbiddenSeatSet, forbiddenPairSet);
+        const pair = sharedBlocked ? null
+          : findOjtPairInOrder(pairOrder, mentor, trainee1, trainee2, state, forbiddenSeatSet, forbiddenPairSet);
         if (pair) {
           seatPersonPair(state, pair.seatA.key, mentor, trainee1);
           seatOjtTraineeAlone(state, pair.seatB.key, trainee2);
@@ -605,7 +652,10 @@ window.SeatTool.algorithm = (function () {
         } else {
           // ペア候補（主要6組＋その他扱いの隣接席6組の計12組）がすべて埋まっていた場合は、
           // 教官・OJT二人をまとめて同席させることにこだわらず、通常の空席探索に切り替える
-          logs.push({ level: 'warn', message: `${mentorName}さん・${traineeNames.join('さん、')}さんのペア席の候補がすべて埋まっていたため、通常の空席探索で個別に配置しました。` });
+          // （sharedBlockedの場合は上でオレンジのメッセージを出しているため重ねて出さない）
+          if (!sharedBlocked) {
+            logs.push({ level: 'warn', message: `${mentorName}さん・${traineeNames.join('さん、')}さんのペア席の候補がすべて埋まっていたため、通常の空席探索で個別に配置しました。` });
+          }
           placeOrOverflow(mentor, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, false);
           placeOrOverflow(trainee1, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, false);
           placeOrOverflow(trainee2, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, false, false);
@@ -622,6 +672,11 @@ window.SeatTool.algorithm = (function () {
     const occupants = slotOccupants(state[seat.key]);
     if (occupants.length >= 2) return false;
     if (occupants.length === 1 && overlaps(person, occupants[0])) return false;
+    // 同じ座席の1人目・2人目として隣接禁止の相手と組み合わせない。〈ver0.5.7.4で追加〉
+    // ADJACENCYは自分の席を含まないため、ver0.5.7.3までは「隣はだめだが同じ机はよい」
+    // という抜けがあった。隣接禁止は勤務時間の重なりに関係なく常に適用する方針
+    // （下のコメント参照）なので、時間帯がずれていても同じ机は避ける。
+    if (occupants.length === 1 && isForbiddenPair(person.name, occupants[0].name, forbiddenPairSet)) return false;
     if (forbiddenSeatSet.has(`${person.name}|${seat.key}`)) return false;
     for (const adjKey of ADJACENCY[seat.key]) {
       for (const occ of slotOccupants(state[adjKey])) {
