@@ -372,6 +372,21 @@
     // ファイルを直して読み込み直しても、前回の赤いエラーがそのまま残っていた。
     // 「読み込み済み」の表示と画面のメッセージが食い違い、直ったのかどうかが
     // 分からない状態になる。読み込めたファイル名を必ず1行出して打ち消す。
+    // ダイアログを出すかどうか（＝読み込めなかったファイル・種類が分からなかった
+    // ファイルがあるか）を先に決める。メッセージ欄へスクロールするのはこの場合だけに
+    // するため。〈ver0.5.7.3〉
+    // ダイアログは「読み込めていないこと」に気づかせるだけにし、詳細は
+    // メッセージ欄で読ませる（実行時の中断ダイアログと同じ考え方）。
+    const lines = [];
+    if (batch.failedLabels.length === 1) {
+      lines.push(`${batch.failedLabels[0]}を読み込めませんでした。`);
+    } else if (batch.failedLabels.length > 1) {
+      lines.push(`${batch.failedLabels.length}個のファイルを読み込めませんでした（${batch.failedLabels.join(' / ')}）。`);
+    }
+    if (batch.unmatched.length > 0) {
+      lines.push(`ファイル名から種類を判別できなかったファイルがあります（${batch.unmatched.join(' / ')}）。`);
+    }
+
     if (batch.logs.length > 0 || batch.loadedLabels.length > 0) {
       const loadedLogs = batch.loadedLabels.length > 0
         ? [{ level: 'info', message: `${batch.loadedLabels.join(' / ')}を読み込みました。` }]
@@ -383,18 +398,14 @@
         ...loadedLogs,
         ...batch.logs.filter(l => l.level !== 'error'),
       ]);
-      scrollToMessages();
-    }
-    // ダイアログは「読み込めていないこと」に気づかせるだけにし、詳細は
-    // メッセージ欄で読ませる（実行時の中断ダイアログと同じ考え方）。
-    const lines = [];
-    if (batch.failedLabels.length === 1) {
-      lines.push(`${batch.failedLabels[0]}を読み込めませんでした。`);
-    } else if (batch.failedLabels.length > 1) {
-      lines.push(`${batch.failedLabels.length}個のファイルを読み込めませんでした（${batch.failedLabels.join(' / ')}）。`);
-    }
-    if (batch.unmatched.length > 0) {
-      lines.push(`ファイル名から種類を判別できなかったファイルがあります（${batch.unmatched.join(' / ')}）。`);
+      // 〈ver0.5.7.3で変更〉全部読み込めたときは画面を動かさない。
+      // 読み込みの次の操作（配置対象日の選択・自動配置を実行・追加のファイルの読み込み）は
+      // すべて「1. CSV読み込み」の中にあるため、下のメッセージ欄へ飛ばすと必ず戻る操作が
+      // 要る。読み込み時に行うのは見出しと文字コードの確認だけで、中身の解析は
+      // 「自動配置を実行」まで行わない。つまりここで出るのはヘッダー不一致・文字化け・
+      // ファイル名不明だけで、いずれも下のダイアログとセットになる。
+      // 読ませる必要があるとき＝ダイアログを出すときだけスクロールする。
+      if (lines.length > 0) scrollToMessages();
     }
     if (lines.length === 0) return;
     const where = batch.failedLabels.length > 0 ? '「2. メッセージ」欄（赤色）' : '「2. メッセージ」欄';

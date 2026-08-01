@@ -293,11 +293,22 @@
     font-size:15px;
   }
   #messages .empty-note{ color:var(--text-muted); }
-  /* メッセージ欄の色の凡例〈ver0.5.7で追加〉。4段階の意味を1行で示す。 */
+  /* メッセージ欄の色の凡例〈ver0.5.7で追加。ver0.5.7.3でトグル化〉。
+     常時表示だと毎回同じ説明が場所を取り、実際のメッセージが下へ押し下げられる。
+     内容は初回に一度読めば足りるため、既定では畳んでおく。開閉の見た目と挙動は
+     「CSVの形式について」などのトグル（details.help）に揃えてある。
+     details.help と詳細度が同じため、この規則は details.help の後ろに置くこと。 */
+  details.legend-toggle{
+    margin:0 0 10px;
+  }
+  details.legend-toggle summary{
+    font-size:15px;
+    margin-bottom:0;
+  }
   .messages-legend{
     font-size:14px;
     color:var(--text-muted);
-    margin:-6px 0 12px;
+    margin:0;
     line-height:1.6;
   }
   .messages-legend .lv-error,
