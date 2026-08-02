@@ -457,7 +457,7 @@ window.SeatTool.algorithm = (function () {
   // 「他」用: 優先順リストにない座席も含めて探す（特に優先順位は設けないため、
   // 他の探索と同様にランダムな順で最初に見つかったものを使う）。
   // allowSeat9 を渡していないため**座席9番は対象外**。この候補は本人の明示指定に
-  // 由来しないため、座席9番の除外はここでも効かせるのが正しい〈ver0.5.7.6でコメントを訂正。
+  // 由来しないため、座席9番の除外はここでも効かせるのが正しい〈ver0.5.8でコメントを訂正。
   // 以前は「全15席から探す」と書いてあり、実際の挙動と食い違っていた〉。
   function findSharedSeatAnywhere(personA, personB, state, forbiddenSeatSet, forbiddenPairSet) {
     return shuffle(SEATS).find(seat => canPlaceSharedSeat(personA, personB, seat, state, forbiddenSeatSet, forbiddenPairSet)) || null;
@@ -727,7 +727,7 @@ window.SeatTool.algorithm = (function () {
   // 到達しない（B-7は座席9番も考慮するため、Aより広い範囲を拾う）。
   // 保存データの読み込み後など、CSVチェックを通らない経路のための保険として残している。
   // userDesignatedSeatsMap（省略可）: silent:true の行を除いた固定席マップ
-  // （＝secret.csv に利用者が書いた指定だけ）。〈ver0.5.7.6で追加〉
+  // （＝secret.csv に利用者が書いた指定だけ）。〈ver0.5.8で追加〉
   // 夜勤の役席・GL2人目を座席10へ入れる指定は ui.js が silent:true で足す内部のもので、
   // secret.csv には存在しない。その人に「固定席の指定が禁止席と重複しています」と
   // 言っても直しようがないため、内部指定だけの人はここでは扱わない
@@ -737,7 +737,7 @@ window.SeatTool.algorithm = (function () {
     const problems = [];
     const userDesignatedMap = userDesignatedSeatsMap || designatedSeatsMap;
     const isSilentOnlyDesignated = (name) => designatedSeatsMap.has(name) && !userDesignatedMap.has(name);
-    // メッセージには内部キー（"2-3"）ではなく画面と同じ座席番号を出す。〈ver0.5.7.6で修正〉
+    // メッセージには内部キー（"2-3"）ではなく画面と同じ座席番号を出す。〈ver0.5.8で修正〉
     const seatNumbersLabel = (seatKeys) => seatKeys.map(k => `${numberOfKey(k)}番`).join('・');
 
     // A. 禁止席が全15席をカバーしている人（絶対にどこにも座れない）
@@ -842,14 +842,26 @@ window.SeatTool.algorithm = (function () {
     return b.shiftIndex - a.shiftIndex;
   }
 
+  // 「secret.csvのルールをすべて外しても、この人が座れる席が残っていないか」。
+  // 〈ver0.5.8で追加〉席そのものが足りないだけなのに
+  // 「配置ルールに矛盾がある可能性があります。secret.csvの条件を確認してください。」と
+  // 出してしまうと、直しようのない指摘になる（しかもダイアログが人数分出る）。
+  // 空の集合で canPlace を数え直せば、容量（枠の空き・勤務時間の重なり）だけの判定になる。
+  const NO_RULES = new Set();
+  function seatsAvailableIgnoringRules(person, state) {
+    return countValidSeats(person, state, NO_RULES, NO_RULES);
+  }
+
   // 空席を探して座らせる。見つからなければログを残して「あふれ」に入れる。
   // isExpectedOverflow=true: 通常のあふれ（情報ログのみ）
-  // isExpectedOverflow=false: 本来起きないはずの配置ルール矛盾（エラー+ダイアログ）
+  // isExpectedOverflow=false: 本来起きないはずの配置ルール矛盾（オレンジ+ダイアログ）
+  //   ただしルールを全部外しても座れない＝単に席が足りない場合は、通常のあふれに倒す
+  //   〈ver0.5.8〉。あふれ欄に出るので気づける（仕様.md §5）。
   function placeOrOverflow(person, state, forbiddenSeatSet, forbiddenPairSet, overflow, placedNames, logs, isExpectedOverflow, avoidAdjacency, deterministic) {
     const seat = findSeat(person, state, forbiddenSeatSet, forbiddenPairSet, avoidAdjacency, deterministic);
     if (seat) {
       seatPerson(state, seat.key, person);
-    } else if (isExpectedOverflow) {
+    } else if (isExpectedOverflow || seatsAvailableIgnoringRules(person, state) === 0) {
       overflow.push(person);
     } else {
       logs.push({
@@ -1058,7 +1070,7 @@ window.SeatTool.algorithm = (function () {
       person.isRookie = true;
       person.rookieDegree = n.degree;
     });
-    // 〈ver0.5.7.6で変更〉以前は `{ ...byName.get(n.name), degree }` と**人のコピー**を作り、
+    // 〈ver0.5.8で変更〉以前は `{ ...byName.get(n.name), degree }` と**人のコピー**を作り、
     // stepRookies がそのコピーを座席に置いていた。rookieRank だけは実物にも代入していたため
     // 実害は出ていなかったが、以後 people に項目を足すと「座席にいる新人だけ古い内容」という
     // 事故になる。並び替え用の情報は別に持ち、座席に置くのは必ず people の実物にする。
@@ -1144,7 +1156,7 @@ window.SeatTool.algorithm = (function () {
           noteSeat9IfUsed(seat, person.name, '固定席', ctx.logs);
         } else {
           // silent:true（ui.jsが足す夜勤の座席10）だけしか指定を持たない人には出さない。
-          // 〈ver0.5.7.6〉secret.csv に固定席を書いていないため、この文面では
+          // 〈ver0.5.8〉secret.csv に固定席を書いていないため、この文面では
           // どこを直せばよいのか分からない。内部指定が通らなかったことは
           // ui.js 側が「座席10へ入れられなかった」と正しい言葉で知らせる。
           if (designatedSeatsMapForBadge.has(person.name)) {
@@ -1280,12 +1292,14 @@ window.SeatTool.algorithm = (function () {
       // ここまでの配置が確定した状態で、この時点で既に座れる座席がゼロの人が
       // いないかを、実際に配置を試みる前に洗い出す。
       for (const person of group) {
-        if (countValidSeats(person, ctx.state, forbiddenSeatSet, forbiddenPairSet) === 0) {
-          ctx.logs.push({
-            level: 'violation', showDialog: true,
-            message: `${person.name}さんは、この時点で座れる座席がありません（禁止席の条件と、既に確定している他の方の座席の組み合わせにより配置不可能です）。secret.csvの条件を確認してください。`,
-          });
-        }
+        if (countValidSeats(person, ctx.state, forbiddenSeatSet, forbiddenPairSet) !== 0) continue;
+        // ルールを全部外しても座れない＝席そのものが足りないだけなので、
+        // secret.csv を疑わせない（通常のあふれとして扱う）。〈ver0.5.8〉
+        if (seatsAvailableIgnoringRules(person, ctx.state) === 0) continue;
+        ctx.logs.push({
+          level: 'violation', showDialog: true,
+          message: `${person.name}さんは、この時点で座れる座席がありません（禁止席の条件と、既に確定している他の方の座席の組み合わせにより配置不可能です）。secret.csvの条件を確認してください。`,
+        });
       }
 
       function placeGreedy(g) {
@@ -1468,12 +1482,13 @@ window.SeatTool.algorithm = (function () {
     // いないかを、実際に配置を試みる前に洗い出す
     // （禁止席・隣接禁止の条件と、既に確定している他の方の座席の組み合わせによる手詰まり）。
     for (const person of remaining) {
-      if (countValidSeats(person, state, forbiddenSeatSet, forbiddenPairSet) === 0) {
-        logs.push({
-          level: 'violation', showDialog: true,
-          message: `${person.name}さんは、この時点で座れる座席がありません（禁止席・隣接禁止の条件と、既に確定している他の方の座席の組み合わせにより配置不可能です）。secret.csvの条件を確認してください。`,
-        });
-      }
+      if (countValidSeats(person, state, forbiddenSeatSet, forbiddenPairSet) !== 0) continue;
+      // 席そのものが足りないだけの場合は secret.csv を疑わせない。〈ver0.5.8〉
+      if (seatsAvailableIgnoringRules(person, state) === 0) continue;
+      logs.push({
+        level: 'violation', showDialog: true,
+        message: `${person.name}さんは、この時点で座れる座席がありません（禁止席・隣接禁止の条件と、既に確定している他の方の座席の組み合わせにより配置不可能です）。secret.csvの条件を確認してください。`,
+      });
     }
 
     while (remaining.length > 0) {
@@ -1895,21 +1910,55 @@ window.SeatTool.algorithm = (function () {
    * 全段階失敗の場合は、最後の段階（段階2）の戻り値に escalationLevel:null と
    * attempts を付けたものを返す（呼び出し側で貪欲法にフォールバックする）。
    */
-  function assignSeatsWithEscalation(shiftRows, rookieRows, secretRows, options) {
-    const opts = options || {};
-    const attempts = [];
-    let last = null;
-    for (let level = 0; level <= ADJACENT_ESCALATION_MAX_LEVEL; level++) {
-      const result = assignSeatsExhaustive(shiftRows, rookieRows, secretRows,
-        { ...opts, adjacentEscalationLevel: level });
-      attempts.push({
+  // 1段階ぶんの探索。同期版・非同期版から共通で呼ぶ。
+  function runEscalationLevel(shiftRows, rookieRows, secretRows, opts, level) {
+    const result = assignSeatsExhaustive(shiftRows, rookieRows, secretRows,
+      { ...opts, adjacentEscalationLevel: level });
+    return {
+      result,
+      attempt: {
         level,
         feasible: result.feasible,
         timedOut: result.timedOut,
         preStepOverflowNames: result.preStepOverflowNames,
         bestPartial: result.bestPartial,
         elapsedMs: result.elapsedMs,
-      });
+      },
+    };
+  }
+
+  function assignSeatsWithEscalation(shiftRows, rookieRows, secretRows, options) {
+    const opts = options || {};
+    const attempts = [];
+    let last = null;
+    for (let level = 0; level <= ADJACENT_ESCALATION_MAX_LEVEL; level++) {
+      const { result, attempt } = runEscalationLevel(shiftRows, rookieRows, secretRows, opts, level);
+      attempts.push(attempt);
+      if (result.feasible && result.solutions.length > 0) {
+        return { ...result, escalationLevel: level, attempts };
+      }
+      last = result;
+    }
+    return { ...last, escalationLevel: null, attempts };
+  }
+
+  /**
+   * assignSeatsWithEscalation の非同期版。〈ver0.5.8で追加〉
+   * 1段階ごとに onLevel(level, maxLevel) を await するため、呼び出し側は
+   * そこで画面を描き直せる（「計算中…」の表示を出す）。
+   * 解が見つからない日は1段階5秒×3段階＝最大15秒かかり、その間ブラウザが
+   * 固まったままだと利用者は「壊れた」と判断してしまうため。
+   * 探索そのものは同期のままなので、固まる時間は最大でも1段階ぶん（5秒）になる。
+   * 結果は同期版と完全に同じ（同じ入力なら同じ探索を同じ順で行う）。
+   */
+  async function assignSeatsWithEscalationAsync(shiftRows, rookieRows, secretRows, options, onLevel) {
+    const opts = options || {};
+    const attempts = [];
+    let last = null;
+    for (let level = 0; level <= ADJACENT_ESCALATION_MAX_LEVEL; level++) {
+      if (onLevel) await onLevel(level, ADJACENT_ESCALATION_MAX_LEVEL);
+      const { result, attempt } = runEscalationLevel(shiftRows, rookieRows, secretRows, opts, level);
+      attempts.push(attempt);
       if (result.feasible && result.solutions.length > 0) {
         return { ...result, escalationLevel: level, attempts };
       }
@@ -2099,6 +2148,6 @@ window.SeatTool.algorithm = (function () {
     // 全探索backtrack（全パターン検索。ver0.4.9でこのファイルに統合）
     assignSeatsExhaustive, reshuffleForbiddenAndOthers, scoreSolution,
     // 隣接禁止の繰り上げ再探索（ver0.4.11で追加）
-    assignSeatsWithEscalation, ADJACENT_ESCALATION_MAX_LEVEL,
+    assignSeatsWithEscalation, assignSeatsWithEscalationAsync, ADJACENT_ESCALATION_MAX_LEVEL,
   };
 })();

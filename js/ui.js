@@ -17,7 +17,7 @@
     buildSecretIndexes, buildAdjacentGroups, buildAdjacentPairs, formatAdjacentLabel,
     overlaps, isForbiddenPair,
     seatByNumber, numberOfKey, numberOfSeat, buildOjtIndexes, buildRookieIndexes,
-    assignSeatsWithEscalation, reshuffleForbiddenAndOthers, ADJACENT_ESCALATION_MAX_LEVEL,
+    assignSeatsWithEscalation, assignSeatsWithEscalationAsync, reshuffleForbiddenAndOthers, ADJACENT_ESCALATION_MAX_LEVEL,
     remainingSeatKeysAfterForbidden,
   } = NS.algorithm;
 
@@ -441,7 +441,7 @@
       if (!pre.ok) { rejectFile(key, pre.messages); return; }
       rawText[key] = text;
       // 月間シフトCSVは読み込み時に解析する。使える行が1件も無ければ採用しない
-      // 〈ver0.5.7.6で変更〉。ver0.5.7.5までは赤いエラーを出しつつ「読み込み済み」と
+      // 〈ver0.5.8で変更〉。ver0.5.7.5までは赤いエラーを出しつつ「読み込み済み」と
       // 表示し、直後に「月間シフトCSVを読み込みました。」という青い行まで並べていた。
       // ダイアログもスクロールも出ないため（endLoadBatchは失敗が0件だと出さない）、
       // 一番肝心なメッセージが画面の下で見過ごされる。中身が空のファイルは
@@ -539,7 +539,7 @@
 
 
   // 月間シフトCSVを読み込み直すたびに呼び、日付セレクタを更新する。
-  // 戻り値は「配置に使える行が1件以上あるか」〈ver0.5.7.6で追加〉。
+  // 戻り値は「配置に使える行が1件以上あるか」〈ver0.5.8で追加〉。
   // 1件も無い場合の赤いメッセージ・ダイアログ・状態表示は、呼び出し側（loadFileInto）が
   // rejectFile で他の読み込み失敗と同じ形にそろえて出す。
   // 1件でも使える行があれば、行ごとの警告は従来どおり「自動配置を実行」時にまとめて表示する。
@@ -584,6 +584,34 @@
     select.disabled = false;
     ymLabel.textContent = yearMonthLabelFromDates(dates);
     updateRunButtonState();
+  }
+
+  // ---------- 「計算中…」表示（ver0.5.8で追加） ----------
+  // 隣接禁止の解が無い日は、全探索が1段階5秒×3段階＝最大15秒かかる。
+  // 探索は同期処理のため、その間ブラウザは操作を受け付けず、進捗も出ないため
+  // 利用者からは「固まった／壊れた」ようにしか見えなかった。
+  // 段階の切れ目で1回描画を挟み、いま何をしているかを出す。固まる時間は
+  // 最大でも1段階ぶん（5秒）になる。探索そのものは同期のままなので、
+  // 配置結果は従来とまったく同じ。
+  let calcBusy = false;
+  const CALC_BUSY_BUTTONS = ['btn-run', 'btn-check', 'btn-print', 'btn-save'];
+  function setCalcBusy(on, label) {
+    calcBusy = on;
+    els.calcTime.textContent = on ? (label || '計算中…') : '';
+    els.calcTime.classList.toggle('calc-busy', on);
+    CALC_BUSY_BUTTONS.forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.disabled = on;
+    });
+    if (!on) updateRunButtonState();
+  }
+  // 実際に画面を描き直させてから次へ進む。
+  // requestAnimationFrame だけだと描画前に戻ることがあるため setTimeout と組み合わせる。
+  function paintOnce() {
+    return new Promise(resolve => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(resolve, 0));
+      else setTimeout(resolve, 0);
+    });
   }
 
   // 「自動配置を実行」ボタンは、配置対象日が選ばれるまでグレーアウトしておく
@@ -1079,7 +1107,8 @@
     render();
   }
 
-  document.getElementById('btn-run').addEventListener('click', () => {
+  document.getElementById('btn-run').addEventListener('click', async () => {
+    if (calcBusy) return; // 計算中の二重起動を防ぐ
     if (!rawText.shift) {
       // 月間シフトCSVを選んだのに弾かれた場合と、そもそも選んでいない場合とで
       // 言い方を変える。「選択してください」だけだと、選んだ本人には話が通じない。
@@ -1164,7 +1193,7 @@
     // 失われる。つまり直し方が一つに決まらないため、止めずに理由を伝える。
     // 教官として座席側へ回る役席・GL（splitDayRowsの分岐）は座席1〜15に並ぶため対象外。
     //
-    // 〈ver0.5.7.6で日勤側と夜勤側に分けた〉ver0.5.7.5までは夜勤の役席・GLも
+    // 〈ver0.5.8で日勤側と夜勤側に分けた〉ver0.5.7.5までは夜勤の役席・GLも
     // まとめて「新人固定席は効きません／早番・遅番エリアまたは夜勤GL枠に配置します」と
     // 出していたが、**夜勤の役席・GLは1名だけが夜勤GL枠に入り、2人目以降は座席1〜15に
     // 並ぶ**（assignNightLeaders）。座席側へ回った人には新人固定席がそのまま効き、
@@ -1240,6 +1269,10 @@
       return;
     }
 
+    // ここから先が重い処理。まず「計算中…」を出して1回描画させる。〈ver0.5.8〉
+    setCalcBusy(true);
+    await paintOnce();
+
     // 計算時間の計測開始（実際の配置計算のみを対象とし、CSVパースやバリデーションは含めない）
     const calcStartTime = performance.now();
 
@@ -1251,10 +1284,16 @@
     // 新人固定席・教官・OJTは常に先のまま）。いずれかの段階で解けた場合はその最良解（スコア最上位）を
     // 採用し、どの段階でも解けなかった場合のみ、従来の貪欲+MRV（assignSeats）に
     // フォールバックする。
-    const dayExhaustiveResult = assignSeatsWithEscalation(opRows, rookieParsed.rows, secretParsed.rows, {
+    const escalationProgress = (side) => async (level, maxLevel) => {
+      setCalcBusy(true, level === 0
+        ? `計算中…（${side}の座席）`
+        : `計算中…（${side}の座席：隣接禁止の再探索 ${level + 1}/${maxLevel + 1}）`);
+      await paintOnce();
+    };
+    const dayExhaustiveResult = await assignSeatsWithEscalationAsync(opRows, rookieParsed.rows, secretParsed.rows, {
       ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS,
       poolCap: EXHAUSTIVE_POOL_CAP, timeBudgetMs: EXHAUSTIVE_TIME_BUDGET_MS,
-    });
+    }, escalationProgress('日勤'));
     const seatResult = buildSeatResultFromExhaustive(
       dayExhaustiveResult, '日勤',
       // どの段階でも解けなかった場合の最終フォールバック。ver0.4.13から、
@@ -1275,7 +1314,7 @@
     const secretIndexes = buildSecretIndexes(secretParsed.rows);
     const nightLeaderResult = assignNightLeaders(nightLeaderRows, secretIndexes.nightGLDesignatedNames);
     // 夜勤の役席・GLが rookie.csv に載っている場合の警告（行き先が決まってから出す）。
-    // 〈ver0.5.7.6で追加〉夜勤GL枠に入った1名は日勤の早番・遅番エリアと同じ扱いだが、
+    // 〈ver0.5.8で追加〉夜勤GL枠に入った1名は日勤の早番・遅番エリアと同じ扱いだが、
     // 座席側へ回った2人目以降は座席1〜15に並ぶため、新人固定席がそのまま効く。
     const nightGLPerson = nightLeaderResult.glState['2-1'];
     if (nightGLPerson && rookieNameSet.has(nightGLPerson.name)) {
@@ -1311,7 +1350,8 @@
       nightContext: true, ojtRows: ojtParsed.rows, maxSolutions: EXHAUSTIVE_MAX_SOLUTIONS,
       poolCap: EXHAUSTIVE_POOL_CAP, timeBudgetMs: EXHAUSTIVE_TIME_BUDGET_MS,
     };
-    const nightExhaustiveResult = assignSeatsWithEscalation(nightSeatRows, rookieParsed.rows, nightSecretRows, nightExhaustiveOptions);
+    const nightExhaustiveResult = await assignSeatsWithEscalationAsync(
+      nightSeatRows, rookieParsed.rows, nightSecretRows, nightExhaustiveOptions, escalationProgress('夜勤'));
     const nightResult = buildSeatResultFromExhaustive(
       nightExhaustiveResult, '夜勤',
       // 日勤と同様、最終フォールバックは最終段階の優先順位で貪欲配置する
@@ -1323,7 +1363,7 @@
       ? { ...nightExhaustiveResult, index: 0 }
       : null;
 
-    // 「夜勤の役席・GLの2人目は座席10へ」が実際に通ったかを確かめる。〈ver0.5.7.6で追加〉
+    // 「夜勤の役席・GLの2人目は座席10へ」が実際に通ったかを確かめる。〈ver0.5.8で追加〉
     // この指定は上で silent:true として足した**ツール内部のもの**で、secret.csv には無い。
     // 新人固定席・優先フラグ・本人の固定席／禁止席・他の方の固定席10などと競合すると
     // 黙って通らないことがあり、ver0.5.7.5までは
@@ -1397,6 +1437,7 @@
 
     // 計算時間の計測終了。「自動配置を実行」ボタンの右側に表示する。
     const calcElapsedMs = Math.round(performance.now() - calcStartTime);
+    setCalcBusy(false);
     els.calcTime.textContent = `計算時間：${calcElapsedMs}ms`;
 
     // 出勤状況で非表示にしたバッジのお知らせ（ver0.5.4）。appStateへの反映後に作る。
@@ -2099,8 +2140,49 @@
     }
     appState.overflow = appState.overflow.filter(Boolean); // 入れ替えで生じた穴を詰める
     appState.nightOverflow = appState.nightOverflow.filter(Boolean);
+    refreshNightGLBadgeSide();
+    // 新人の順位（新人1〜7）は「その側に並んでいる新人の中での順」で決まるため、
+    // カードを別の側・別の枠へ動かしたら付け直す。〈ver0.5.8で追加〉
+    // ✎編集の保存時は ver0.5.3 から付け直していたが、ドラッグでは付け直しておらず、
+    // 保存→読み込みで番号が変わる（例: 日勤側の「新人2」が、夜勤側へ動かしてあると
+    // 読み込み後に「新人1」になる）状態だった。rookie.csv が未読み込みのときは
+    // reapplyRookieRanks 側で何もしないため、保存データの順位はそのまま残る。
+    reapplyRookieRanks();
     dragSource = null;
     render();
+  }
+
+  // 「夜勤GL席」バッジだけは、**その人が日勤側と夜勤側のどちらにいるか**で決まる
+  // （ver0.5.6の方針。secret.csvに指定があり、かつ夜勤側にいる人に付ける）。
+  // 他のバッジはCSVの記載だけで決まるため動かしても変わらないが、これだけは
+  // カードを反対側へ動かした時点で付け外しが要る。〈ver0.5.8で追加〉
+  // ver0.5.7.5までは付け直していなかったため、日勤側から夜勤側へ動かしても
+  // バッジが出ず（逆も同様）、保存して読み込み直した時点で初めて表示が変わっていた。
+  // ここで付け替えるのはこの1項目だけ。隣接禁止・教官バッジの出し分けは
+  // 「その日出勤しているか」で決めており、動かしても変わらない（ver0.5.4の方針）。
+  function refreshNightGLBadgeSide() {
+    const idx = appState.ruleIndexes;
+    if (!idx) return;
+    const names = idx.nightGLDesignatedNames;
+    const apply = (p, isNightSide) => (p && p.name
+      ? { ...p, hasNightGLDesignation: isNightSide && names.has(p.name) }
+      : p);
+    for (const s of SEATS) {
+      for (let i = 0; i < 2; i++) {
+        appState.seats[s.key][i] = apply(appState.seats[s.key][i], false);
+        appState.nightSeats[s.key][i] = apply(appState.nightSeats[s.key][i], true);
+      }
+    }
+    appState.overflow = appState.overflow.map(p => apply(p, false));
+    appState.nightOverflow = appState.nightOverflow.map(p => apply(p, true));
+    [[appState.early, false], [appState.late, false],
+     [appState.nightGL, true], [appState.nightSpare, true]].forEach(([st, isNightSide]) => {
+      if (!st) return;
+      LEADER_ROWS.forEach(r => LEADER_COLS.forEach(c => {
+        const k = `${r}-${c}`;
+        st[k] = apply(st[k], isNightSide);
+      }));
+    });
   }
 
   // 座席のスロット1つ分（空席 or 人物カード or 編集フォーム）とドロップ受付を作る
@@ -2334,18 +2416,27 @@
     // 配置し直す、をセットで行う。候補が1件しかない場合はrenderCandidatePanelで
     // 無効化されるため、ここに来る時点で必ず2件以上ある）。
     // 指定した候補（index）を画面に反映する。「次案を表示」「候補1に戻す」で共通。
+    // 〈ver0.5.8で変更〉候補そのもの（探索時に組み立てた盤面）をそのまま出す。
+    // それ以前は候補を切り替えるたびに reshuffleForbiddenAndOthers を通しており、
+    // 禁止席だけの対象者・その他スタッフが毎回ランダムに並び替わっていた。そのため
+    //   ・「候補1に戻す」を押しても押すたび違う盤面になり、**元の案に戻れない**
+    //     （画面の説明は「候補1へ一発で戻れます」、ボタンの説明は
+    //       「候補1（最良と判定された案）に戻します」）
+    //   ・候補を行き来しても隣接禁止以外の人まで動くので、案の比較ができない
+    //   ・「一部シャッフル」（禁止席対象者・その他だけを振り直す）との役割が重複する
+    // という状態だった。候補の盤面は探索時に確定していて再現できるので、それを使う。
     function applyCandidate(ex, index) {
       const prevState = appState[seatsKey];
       ex.index = index;
-      const reshuffled = reshuffleForbiddenAndOthers(ex.solutions[index], ex.context);
+      const solution = ex.solutions[index];
       // 座席表を差し替える前に、いまの画面の状態（削除・移動・✎編集）を集めておく
       const current = collectCurrentPeople();
-      const nextState = reconcileRebuiltState(reshuffled.state, current, seatsKey, overflowKey);
-      const nextOverflow = rebuildOverflowList(ex, reshuffled.overflow, seatsKey, overflowKey, current);
+      const nextState = reconcileRebuiltState(solution.state, current, seatsKey, overflowKey);
+      const nextOverflow = rebuildOverflowList(ex, solution.overflow, seatsKey, overflowKey, current);
       appState[seatsKey] = nextState;
       appState[overflowKey] = nextOverflow;
       editingLoc = null;
-      const changed = diffChangedNames(prevState, reshuffled.state);
+      const changed = diffChangedNames(prevState, solution.state);
       if (prefix === 'day') render(changed, undefined);
       else render(undefined, changed);
     }
@@ -2671,6 +2762,16 @@
       savedAt: `${now.getFullYear()}/${pad2(now.getMonth() + 1)}/${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`,
       currentDate: appState.currentDate,
       currentDateLabel: appState.currentDateLabel,
+      // その日の出勤者の氏名（日勤側／夜勤側）。〈ver0.5.8で追加〉
+      // 隣接禁止バッジ・教官バッジの出し分けは「その日出勤しているか」で決まり、
+      // 「いま盤面のどこにいるか」は見ない（ver0.5.4の方針）。保存ファイルに
+      // この一覧が無かったため、読み込み後は盤面から出勤者を推定するしかなく、
+      // **✎で削除した人・反対側へ動かした人がいると相手のバッジが消えていた**
+      // （保存する前の画面には出ていたのに、読み込むと消える）。
+      // secret.csv 由来の情報ではなく月間シフトCSV相当の氏名のため、保存してよい。
+      // 古い保存ファイルにこの項目は無いので、読み込み側は従来どおり盤面から補う。
+      dayRoster: Array.from(appState.dayRosterNames || []),
+      nightRoster: Array.from(appState.nightRosterNames || []),
       seats: exportSeatState(appState.seats),
       early: exportLeaderState(appState.early),
       late: exportLeaderState(appState.late),
@@ -2901,6 +3002,10 @@
   function reapplyRookieRanks() {
     const idx = appState.rookieIndexes;
     if (!idx) return;
+    // 早番・遅番エリア／夜勤GL枠・予備枠は対象に含めない。自動配置側も座席1〜15に
+    // 並ぶ人（`people`）だけで順位を決めており、役席・GLとして枠に入る人は
+    // 新人固定席の対象外（仕様.md §5）。ここで含めると、その人が枠にいるだけで
+    // 順位を1つ消費し、自動配置直後の番号とずれる。〈ver0.5.8で確認・現状維持〉
     const rankSide = (seatState, overflowList) => {
       const found = [];
       SEATS.forEach(s => {
@@ -2914,6 +3019,14 @@
         const da = Number.isFinite(a.p.rookieDegree) ? a.p.rookieDegree : Infinity;
         const db = Number.isFinite(b.p.rookieDegree) ? b.p.rookieDegree : Infinity;
         if (da !== db) return da - db;
+        // 新人度合いが同じときは、**いま付いている順位**を優先して並びを保つ。
+        // 〈ver0.5.8で追加〉自動配置時の同数値のタイブレークは「月間シフトCSVで後ろの行」
+        // だが、その行順は保存ファイルに残らない。ここで盤面の並びだけで振り直すと、
+        // 保存→読み込みで「新人1」と「新人2」が入れ替わり、印刷済みの紙と食い違っていた。
+        // 順位は保存データにも ✎編集前のカードにも入っているので、それを引き継ぐ。
+        const ra = Number.isFinite(a.p.rookieRank) ? a.p.rookieRank : Infinity;
+        const rb = Number.isFinite(b.p.rookieRank) ? b.p.rookieRank : Infinity;
+        if (ra !== rb) return ra - rb;
         return b.order - a.order;
       });
       found.forEach((entry, i) => {
@@ -2996,11 +3109,16 @@
       appState.rookieIndexes = null;
     }
     // 隣接禁止バッジ・教官バッジの出し分けに使う「その日の出勤者」を確定させる。
-    // 〈ver0.5.4で追加〉保存ファイルには月間シフトCSVが含まれないため、
-    // 復元した画面に並んでいる人＝その日の出勤者とみなす。
+    // 〈ver0.5.8で変更〉保存ファイルが出勤者の一覧（dayRoster / nightRoster）を
+    // 持っていればそれを使う。持っていない古い保存ファイルのときだけ、従来どおり
+    // 復元した画面に並んでいる人＝その日の出勤者とみなす（この推定だと、✎で削除した人・
+    // 反対側へ動かした人が出勤者から抜け、相手のバッジが保存前と食い違っていた）。
     const present = collectPresentNamesFromBoard();
-    appState.dayRosterNames = present.day;
-    appState.nightRosterNames = present.night;
+    const savedRoster = (v, fallback) => (Array.isArray(v)
+      ? new Set(v.filter(n => typeof n === 'string' && n).map(resolveName))
+      : fallback);
+    appState.dayRosterNames = savedRoster(data.dayRoster, present.day);
+    appState.nightRosterNames = savedRoster(data.nightRoster, present.night);
     reapplyBadges();
     appState.currentDate = typeof data.currentDate === 'string' ? data.currentDate : null;
     appState.currentDateLabel = typeof data.currentDateLabel === 'string' ? data.currentDateLabel : null;
@@ -3149,7 +3267,7 @@
   // あふれ一覧の印刷用HTML（0件なら空文字）
   function printOverflowHtml(overflowArr) {
     if (overflowArr.length === 0) return '';
-    // 〈ver0.5.7.6で変更〉時刻を素のテキストで出していたため、あふれた人の
+    // 〈ver0.5.8で変更〉時刻を素のテキストで出していたため、あふれた人の
     // 前残業・後残業（※／◆）が紙から落ちていた。座席カードと同じ printTimeSpan を使う。
     return '<div class="print-overflow"><h2>あふれ</h2><ul>'
       + overflowArr.map(p => `<li>${escapeHtml(p.name)}（${printTimeSpan(p.start, p.frontOT)}<span class="pt-sep">-</span>${printTimeSpan(p.end, p.backOT)}）</li>`).join('')
@@ -3169,7 +3287,7 @@
 
     // 残業の記号が1件でもあれば、意味を説明する凡例を表示する。
     // ページごと・種別ごとに判定するため、OP残業しかいない日に「◆…GL残業」は出ない。
-    // 〈ver0.5.7.6〉あふれ欄にも残業マーカーを出すようになったため、凡例の集計に含める。
+    // 〈ver0.5.8〉あふれ欄にも残業マーカーを出すようになったため、凡例の集計に含める。
     const dayLegendHtml = otLegendHtml(collectOTKinds([]
       .concat(...SEATS.map(s => appState.seats[s.key] || []))
       .concat(Object.values(appState.early))

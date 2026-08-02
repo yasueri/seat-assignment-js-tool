@@ -335,6 +335,8 @@
      info（青）      … お知らせ
      現場への説明は「赤が出たら座席表はできていない。それ以外は座席表を見ながら確認する」 */
   .log-line.info{ border-left-color:var(--accent); }
+  /* 「計算中…」表示（ver0.5.8） */
+  .calc-time.calc-busy{ color:var(--accent); font-weight:700; }
   .log-line.warn{ border-left-color:var(--lock); background:var(--lock-bg); }
   .log-line.violation{ border-left-color:var(--priority); background:var(--priority-bg); }
   .log-line.error{ border-left-color:var(--overflow); background:var(--overflow-bg); }
