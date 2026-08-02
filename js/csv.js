@@ -358,7 +358,7 @@ window.SeatTool.csv = (function () {
         // 重なりなし＝受け入れる。例外的な勤務のため注意は促す。
         const allTimes = [...previous, { start, end }]
           .map(s => `${s.start}-${s.end}`).join(' / ');
-        logs.push({ level: 'warn', message: `${date}の「${name}」が${previous.length + 1}回出勤として登録されています（${allTimes}）。応援勤務でなければ入力をご確認ください。` });
+        logs.push({ level: 'warn', message: `${date}の「${name}」が${previous.length + 1}回出勤として登録されています（${allTimes}）。間違いであれば、元のExcelを修正し、CSVを出力し直してください。` });
         previous.push({ start, end, startMin, endMin });
       } else {
         seenShifts.set(key, [{ start, end, startMin, endMin }]);
@@ -420,15 +420,18 @@ window.SeatTool.csv = (function () {
 
     dataRows.forEach((r, i) => {
       const name = resolve(cell(r, 0));
-      // 新人度合いは全角数字（１２３）でも受け付ける。〈ver0.5.3〉
-      // secret.csvの優先フラグ（normalizeDigits）と扱いをそろえたもの。
-      // 小数点も全角（．）を半角に直してから数値化する。
-      const degree = parseFloat(normalizeDigits(cell(r, 1)).replace(/．/g, '.'));
+      // 新人度合いは「0以上の整数」だけを受け付ける。全角数字（１２３）でもよい。
+      // 〈ver0.5.7.6で変更。それ以前は parseFloat で小数も通り、「3級」のように
+      //   数字で始まる文字列も 3 として通っていた〉
+      // secret.csv の優先フラグ（`/^\d+$/`）と数値の書式をそろえるための変更。
+      // 順位付けにしか使わない値のため、小数を認める理由がない。
+      const degreeCell = normalizeDigits(cell(r, 1));
       if (!name) return;
-      if (isNaN(degree)) {
-        logs.push({ level: 'warn', message: `rookie.csv ${lineNoOf(r, i)}行目: 新人度合いが数値ではないため読み飛ばしました（${name}）` });
+      if (!/^\d+$/.test(degreeCell)) {
+        logs.push({ level: 'warn', message: `rookie.csv ${lineNoOf(r, i)}行目: 新人度合いが整数ではないため読み飛ばしました（${name}）。半角・全角どちらの数字でも指定できますが、小数や「1年目」のような文字は使えません。` });
         return;
       }
+      const degree = parseInt(degreeCell, 10);
       // 重複判定は空白を除いた氏名（nameKey）で行う。〈ver0.5.6で変更〉
       // 「山田太郎」と「山田 太郎」は同一人物のため、2行あれば重複として扱う。
       if (seenNames.has(nameKey(name))) {
@@ -527,12 +530,16 @@ window.SeatTool.csv = (function () {
         // 「山田太郎」と「山田 太郎」は同一人物のため、同じ種別に2行あれば重複として扱う。
         // メッセージには利用者が書いた表記をそのまま出すため、集めるのは表示用の氏名。
         const nameK = nameKey(name);
-        if (seenSet.has(nameK)) dupSet.add(name);
-        seenSet.add(nameK);
 
         // 半角・全角スペースどちらでも区切りとして認める（同じ行内の重複番号は1つにまとめる）
         const tokens = seatCell.split(/[ \u3000]+/).filter(Boolean);
         const seenNumsInRow = new Set();
+        // 〈ver0.5.7.6で変更〉重複の登録は、この行が実際に指定を1件でも作れたときだけ行う。
+        // それ以前は tokens を読む前に登録していたため、「固定席,甲,,99番,」のように
+        // 座席番号がすべて無効で**1件も指定を作れなかった行**でも「同じ種別に複数行あります」
+        // としてB-1で中断していた。効いていない行を理由に止めるのは過剰で、
+        // その行には既に黄色の警告（座席番号として認識できません 等）が出ている。
+        const seatCountBefore = result.length;
         tokens.forEach(rawTok => {
           if (rawTok === '夜勤GL席') {
             if (kind !== 'seat_designated') {
@@ -559,6 +566,10 @@ window.SeatTool.csv = (function () {
           seenNumsInRow.add(seatNum);
           result.push({ type: kind, name, row: seat.row, col: seat.col });
         });
+        if (result.length > seatCountBefore) {
+          if (seenSet.has(nameK)) dupSet.add(name);
+          seenSet.add(nameK);
+        }
       } else if (!priorityRegistered) {
         // 優先フラグを登録できた行は、B-9のメッセージで同じ内容を伝えるため
         // ここでは二重に警告しない。〈ver0.5.7.1〉優先フラグが数値でなかった行は
@@ -650,13 +661,19 @@ window.SeatTool.csv = (function () {
     const resolve = typeof resolveName === 'function' ? resolveName : displayName;
     const dataRows = raw.slice(1);
     const result = [];
-    const seenMentors = new Set(); // 教官名（nameKey）
+    // 教官名（nameKey）-> このファイルで最初に出てきた表記。
+    // 〈ver0.5.7.6で Set から Map に変更〉重複の検出は nameKey、集計は表示用の氏名という
+    // 取り違えがあり、「山田太郎」と「山田 太郎」のように表記だけ違う2行を書いた場合に、
+    // メッセージへ2行目の表記しか出ないことがあった。以後は **キーを nameKey にそろえ、
+    // 表示にはそのキーで最初に出てきた表記を使う。**
+    const mentorDisplayOf = new Map();
     // 重複の中身。〈ver0.5.7で変更〉呼び出し側（ui.js）が「選択日に出勤している人に
     // 関するものだけ中断する」判定をできるよう、関係者の氏名まで持たせる。
     // メッセージもここでは作らず、出勤者に絞った後で呼び出し側が作る。
-    const duplicateMentors = new Map();  // 教官名 -> 関係者の氏名（教官＋その行のOJT対象者）
+    const duplicateMentors = new Map();  // 教官名(nameKey) -> { name, related:Set }
     const traineeOwner = new Map(); // OJT対象者名（nameKey）-> 最初に見つかった教官名（重複検出用）
-    const duplicateTrainees = new Map(); // OJT対象者名 -> 紐づいている教官名の配列
+    const traineeDisplayOf = new Map(); // OJT対象者名（nameKey）-> 最初に出てきた表記
+    const duplicateTrainees = new Map(); // OJT対象者名(nameKey) -> { name, mentors:Set }
 
     dataRows.forEach((r, i) => {
       const rowLabel = `ojt.csv ${lineNoOf(r, i)}行目`;
@@ -688,13 +705,15 @@ window.SeatTool.csv = (function () {
         logs.push({ level: 'warn', message: `${rowLabel}: 教官名とOJT対象者に同じ氏名（${mentorName}）が指定されています。読み飛ばしました` });
         return;
       }
-      if (seenMentors.has(nameKey(mentorName))) {
-        const related = duplicateMentors.get(mentorName) || new Set([mentorName]);
-        [ojt1Raw, ojt2Raw].filter(Boolean).forEach(n => related.add(n));
-        duplicateMentors.set(mentorName, related);
+      const mentorK = nameKey(mentorName);
+      if (mentorDisplayOf.has(mentorK)) {
+        const canonical = mentorDisplayOf.get(mentorK);
+        const entry = duplicateMentors.get(mentorK) || { name: canonical, related: new Set([canonical]) };
+        [ojt1Raw, ojt2Raw].filter(Boolean).forEach(n => entry.related.add(n));
+        duplicateMentors.set(mentorK, entry);
         return;
       }
-      seenMentors.add(nameKey(mentorName));
+      mentorDisplayOf.set(mentorK, mentorName);
 
       // OJT一人目が空欄でOJT二人目のみ入力されている場合も、教官とペア（同席）で
       // 配置できるよう、OJT二人目をOJT一人目の位置に繰り上げて扱う
@@ -709,10 +728,12 @@ window.SeatTool.csv = (function () {
       const trainees = [ojt1, ojt2].filter(Boolean);
       trainees.forEach(name => {
         const nameK = nameKey(name);
+        if (!traineeDisplayOf.has(nameK)) traineeDisplayOf.set(nameK, name);
         if (traineeOwner.has(nameK) && traineeOwner.get(nameK) !== mentorName) {
-          const mentors = duplicateTrainees.get(name) || new Set([traineeOwner.get(nameK)]);
-          mentors.add(mentorName);
-          duplicateTrainees.set(name, mentors);
+          const entry = duplicateTrainees.get(nameK)
+            || { name: traineeDisplayOf.get(nameK), mentors: new Set([traineeOwner.get(nameK)]) };
+          entry.mentors.add(mentorName);
+          duplicateTrainees.set(nameK, entry);
         }
         traineeOwner.set(nameK, mentorName);
       });
@@ -776,8 +797,8 @@ window.SeatTool.csv = (function () {
       rows: result,
       logs,
       // 〈ver0.5.7で形を変更〉氏名の配列から、関係者つきの一覧に変更した。
-      duplicateMentors: Array.from(duplicateMentors, ([name, related]) => ({ name, relatedNames: Array.from(related) })),
-      duplicateTrainees: Array.from(duplicateTrainees, ([name, mentors]) => ({ name, mentorNames: Array.from(mentors) })),
+      duplicateMentors: Array.from(duplicateMentors.values(), e => ({ name: e.name, relatedNames: Array.from(e.related) })),
+      duplicateTrainees: Array.from(duplicateTrainees.values(), e => ({ name: e.name, mentorNames: Array.from(e.mentors) })),
       // 教官とOJT対象者の兼務〈ver0.5.7.4で追加。B-10〉
       mentorTraineeConflicts,
     };

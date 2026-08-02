@@ -355,10 +355,7 @@
     gap:14px;
   }
   .leader-area{
-    /* 座席グリッドと横幅をそろえる（2枠 + gap14px = グリッド幅）。
-       〈ver0.5.7.4〉座席1マスを224pxにしたのに合わせて 394px → 462px。
-       224*4 + 14*3 = 938px、(938 - 14) / 2 = 462px */
-    width:462px;
+    width:418px;
     background:#F9FAFC;
     border:1px solid var(--border);
     border-radius:9px;
@@ -444,13 +441,9 @@
     flex:1;
   }
 
-  /* 〈ver0.5.7.4で 190px → 224px〉座席カードは「氏名＋時刻」と「バッジ列」を横に並べる。
-     時刻は等幅フォント・nowrapで、残業マーカー（※ / ◆）が付くと最大 約120px になる。
-     190px のときは .info（93px固定）に収まりきらず、はみ出した時刻がバッジに重なっていた。
-     必要幅の内訳は .person-card .info のコメントを参照。 */
   .seat-grid{
     display:grid;
-    grid-template-columns:repeat(4, 224px);
+    grid-template-columns:repeat(4, 202px);
     grid-template-rows:repeat(4, auto);
     gap:14px;
   }
@@ -510,21 +503,12 @@
     flex-direction:row;
     align-items:center;
     justify-content:flex-start;
-    gap:8px;                 /* 〈ver0.5.7.4〉10px → 8px。時刻の幅を優先する */
+    gap:10px;
     position:relative;
   }
   .person-card.rookie{ border-left:4px solid var(--rookie); }
   .person-card .info{
-    /* 編集ボタンの位置をカード間でそろえるための固定幅。
-       〈ver0.5.7.4で 93px → 124px〉ここに入るのは氏名行と時刻行で、必要幅は時刻行で決まる。
-         ・時刻は等幅フォント16px・nowrap で、overflow指定がないため、
-           はみ出すと右隣のバッジ列に重なる（93pxのときに実際に起きていた）
-         ・最も長くなるのは「時・分とも2桁 ＋ 残業マーカー1つ」
-           例:「22:30※-32:00」。残業は前・後のどちらか一方しか付かない
-         ・実測 約111px（Windows既定のConsolas）／約120px（Courier Newへ落ちた場合）
-       Courier New 側でも収まるよう 124px とし、環境によって崩れないようにしている。
-       氏名行は「5文字＋✎ボタン」で約95pxのため、この幅で足りる。 */
-    width:124px;
+    width:105px; /* 編集ボタンの位置をここで揃える固定幅 */
     flex-shrink:0;
     display:flex;
     flex-direction:column;
@@ -553,7 +537,7 @@
      印刷時にマーカーが出ない設定のプリンタでも、記号だけで見分けられる。 */
   .ot-time{
     border-radius:4px;
-    padding:0 2px;           /* 〈ver0.5.7.4〉3px → 2px。時刻行の幅を2px詰める */
+    padding:0 3px;
   }
   .ot-time.ot-op{ background:var(--ot-bg); }
   .ot-time.ot-gl{ background:var(--ot-gl-bg); }

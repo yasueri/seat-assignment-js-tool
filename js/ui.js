@@ -418,12 +418,16 @@
   // （どちらが使われているのか分からなくなるため）。
   // なお画面の座席表はそのまま残す。まだ「作り直す」と言われていない段階のため、
   // 表示中の座席表は正しい内容のまま（日付ラベルも一致している）。
-  function rejectFile(key, messages) {
+  // extraLogs（省略可）: 赤の本文に続けて出す明細（月間シフトCSVの行ごとの警告など）。
+  function rejectFile(key, messages, extraLogs) {
     rawText[key] = null;
     rejectedFiles.add(key);
     markFileFailed(key, '読み込めませんでした（下記のメッセージをご確認ください）');
     if (key === 'shift') { shiftMonthly = null; populateDateSelect(null); }
-    emitMessages(messages.map(message => ({ level: 'error', message })));
+    emitMessages([
+      ...messages.map(message => ({ level: 'error', message })),
+      ...(extraLogs || []),
+    ]);
     noteLoadFailure(fileLabel(key));
   }
 
@@ -436,10 +440,23 @@
       const pre = preflightCsv(key, text);
       if (!pre.ok) { rejectFile(key, pre.messages); return; }
       rawText[key] = text;
+      // 月間シフトCSVは読み込み時に解析する。使える行が1件も無ければ採用しない
+      // 〈ver0.5.7.6で変更〉。ver0.5.7.5までは赤いエラーを出しつつ「読み込み済み」と
+      // 表示し、直後に「月間シフトCSVを読み込みました。」という青い行まで並べていた。
+      // ダイアログもスクロールも出ないため（endLoadBatchは失敗が0件だと出さない）、
+      // 一番肝心なメッセージが画面の下で見過ごされる。中身が空のファイルは
+      // ヘッダー不一致・文字化けと同じく「そのファイルは使えない」なので、扱いをそろえる。
+      if (key === 'shift') {
+        const usable = refreshShiftMonthly();
+        if (!usable) {
+          const rowLogs = (shiftMonthly && shiftMonthly.logs) || [];
+          rejectFile(key, ['月間シフトCSVから、配置に使える行を1件も読み取れませんでした。下記の内容を元のExcelで修正し、CSVを出力し直してください。'], rowLogs);
+          return;
+        }
+      }
       rejectedFiles.delete(key); // 読み直して通ったので、弾いた記録は消す〈ver0.5.7.2〉
       markFileLoaded(key, file.name);
       noteLoadSuccess(fileLabel(key));
-      if (key === 'shift') refreshShiftMonthly();
       // secret.csvを（再)読み込みしたとき、既に配置が存在する場合は
       // 違反チェック用のルール（ruleIndexes）と、配置済みカードのバッジ表示を
       // その場で再構築する。これにより、保存した配置を読み込んだ後に
@@ -521,23 +538,15 @@
   }
 
 
-  // 月間シフトCSVを読み込み直すたびに呼び、日付セレクタを更新する
+  // 月間シフトCSVを読み込み直すたびに呼び、日付セレクタを更新する。
+  // 戻り値は「配置に使える行が1件以上あるか」〈ver0.5.7.6で追加〉。
+  // 1件も無い場合の赤いメッセージ・ダイアログ・状態表示は、呼び出し側（loadFileInto）が
+  // rejectFile で他の読み込み失敗と同じ形にそろえて出す。
+  // 1件でも使える行があれば、行ごとの警告は従来どおり「自動配置を実行」時にまとめて表示する。
   function refreshShiftMonthly() {
     shiftMonthly = parseShiftMonthlyRows(rawText.shift);
     populateDateSelect(shiftMonthly);
-    // 使える行が1件も無い場合、配置対象日を選べず「自動配置を実行」まで進めないため、
-    // 解析時に作られた行ごとの警告が画面に出る機会そのものが無くなってしまう。
-    // 〈ver0.5.3で追加〉原因が分かるよう、読み込んだ時点でメッセージ欄に出す。
-    // 1件でも使える行があれば、警告は従来どおり「自動配置を実行」時にまとめて表示する。
-    if (shiftMonthly.dates.length === 0) {
-      emitMessages([
-        {
-          level: 'error',
-          message: '月間シフトCSVから、配置に使える行を1件も読み取れませんでした。下記の内容を元のExcelで修正し、CSVを出力し直してください。',
-        },
-        ...shiftMonthly.logs,
-      ]);
-    }
+    return shiftMonthly.dates.length > 0;
   }
 
   // 「配置対象日」セレクタを、読み込んだ月間シフトCSVの日付一覧で埋める
@@ -1154,13 +1163,23 @@
     // 方法は rookie.csv の行を消すことで、そうするとOP勤務の日の新人ルールまで
     // 失われる。つまり直し方が一つに決まらないため、止めずに理由を伝える。
     // 教官として座席側へ回る役席・GL（splitDayRowsの分岐）は座席1〜15に並ぶため対象外。
+    //
+    // 〈ver0.5.7.6で日勤側と夜勤側に分けた〉ver0.5.7.5までは夜勤の役席・GLも
+    // まとめて「新人固定席は効きません／早番・遅番エリアまたは夜勤GL枠に配置します」と
+    // 出していたが、**夜勤の役席・GLは1名だけが夜勤GL枠に入り、2人目以降は座席1〜15に
+    // 並ぶ**（assignNightLeaders）。座席側へ回った人には新人固定席がそのまま効き、
+    // 実際に座席5へ着席して「新人1」バッジまで付くため、この文言は事実と逆だった。
+    // どちらに回るかは assignNightLeaders を呼ぶまで決まらないので、夜勤側の警告は
+    // その後（nightLeaderResult が出てから）に出す。
     const rookieNameSet = new Set((rookieParsed.rows || []).map(r => r.name));
-    [...new Set(
-      [...leaderRows, ...nightLeaderRows].map(r => r.name).filter(name => rookieNameSet.has(name))
-    )].forEach(name => allLogs.push({
+    const rookieLeaderNote = (name, where) => ({
       level: 'warn',
-      message: `rookie.csv：「${name}」さんはこの日、役席・GLとして出勤するため、新人固定席は効きません（新人固定席は座席1〜15のルールで、早番・遅番エリア／夜勤GL枠には効かないため）。この日は早番・遅番エリアまたは夜勤GL枠に配置します。`,
-    }));
+      message: `rookie.csv：「${name}」さんはこの日、役席・GLとして${where}に入るため、新人固定席は効きません`
+        + '（新人固定席は座席1〜15のルールのため）。'
+        + '対処は不要です。同じ人がOP勤務の日は新人固定席が効くため、rookie.csv はそのままにしてください。',
+    });
+    [...new Set(leaderRows.map(r => r.name).filter(name => rookieNameSet.has(name)))]
+      .forEach(name => allLogs.push(rookieLeaderNote(name, '早番・遅番エリア')));
 
     // 教官とOJT対象者が、日勤側と夜勤側に分かれて出勤する日。〈ver0.5.7.4で追加〉
     // 日勤と夜勤は座席表が完全に別物のため、この2人は同席できない。実際には
@@ -1255,6 +1274,20 @@
     //    GL枠の優先候補は secret.csv の 固定席「夜勤GL席」から取得する）
     const secretIndexes = buildSecretIndexes(secretParsed.rows);
     const nightLeaderResult = assignNightLeaders(nightLeaderRows, secretIndexes.nightGLDesignatedNames);
+    // 夜勤の役席・GLが rookie.csv に載っている場合の警告（行き先が決まってから出す）。
+    // 〈ver0.5.7.6で追加〉夜勤GL枠に入った1名は日勤の早番・遅番エリアと同じ扱いだが、
+    // 座席側へ回った2人目以降は座席1〜15に並ぶため、新人固定席がそのまま効く。
+    const nightGLPerson = nightLeaderResult.glState['2-1'];
+    if (nightGLPerson && rookieNameSet.has(nightGLPerson.name)) {
+      allLogs.push(rookieLeaderNote(nightGLPerson.name, '夜勤GL枠'));
+    }
+    [...new Set(nightLeaderResult.seatLeaders.map(p => p.name).filter(name => rookieNameSet.has(name)))]
+      .forEach(name => allLogs.push({
+        level: 'warn',
+        message: `rookie.csv：「${name}」さんはこの日、夜勤の役席・GLとして座席1〜15に並ぶため、新人固定席がそのまま効きます`
+          + '（座席5→10→…の順に着席し、「新人」バッジも付きます）。'
+          + '役席・GLの日は新人として扱いたくない場合は、作成者にご連絡ください。',
+      }));
     // 2) 座席側に回るリーダー（2人目以降）をOPと合流させる。2人目には座席10の
     //    固定席ルールをこの配置限定で追加する（secret.csv自体は変更しない）。
     //    silent:true を付けることで、座席への強制配置は行いつつ「固定席」
@@ -1289,6 +1322,35 @@
     appState.nightExhaustive = (nightExhaustiveResult.feasible && nightExhaustiveResult.solutions.length > 0)
       ? { ...nightExhaustiveResult, index: 0 }
       : null;
+
+    // 「夜勤の役席・GLの2人目は座席10へ」が実際に通ったかを確かめる。〈ver0.5.7.6で追加〉
+    // この指定は上で silent:true として足した**ツール内部のもの**で、secret.csv には無い。
+    // 新人固定席・優先フラグ・本人の固定席／禁止席・他の方の固定席10などと競合すると
+    // 黙って通らないことがあり、ver0.5.7.5までは
+    //   ・何も出ない（例: 本人が固定席12を持っている → 12番に座って座席10ルールは消える）
+    //   ・逆に「指定された座席に配置できません」と、利用者が書いていない固定席を
+    //     指すメッセージが出る（secret.csvを見に行っても直せない）
+    // のどちらかになっていた。ここで結果を見て、事実だけを1件伝える。
+    // 中断はしない（本人の固定席が優先されただけ、という正常なケースを含むため）。
+    if (nightLeaderResult.seat10Name) {
+      const forcedSeat10 = seatByNumber(10);
+      const placedAtSeat10 = (nightResult.state[forcedSeat10.key] || [])
+        .some(p => p && p.name === nightLeaderResult.seat10Name);
+      if (!placedAtSeat10) {
+        // 実際にどこへ行ったかまで書く。座席表とあふれ欄を目で探す手間を残さないため。
+        const actualSeat = SEATS.find(sx => (nightResult.state[sx.key] || [])
+          .some(p => p && p.name === nightLeaderResult.seat10Name));
+        const where = actualSeat ? `座席${numberOfKey(actualSeat.key)}番`
+          : (nightResult.overflow || []).some(p => p && p.name === nightLeaderResult.seat10Name) ? 'あふれ欄' : '別の場所';
+        allLogs.push({
+          level: 'warn',
+          message: `【夜勤】役席・GLが2名以上のため「${nightLeaderResult.seat10Name}」さんを座席10へ入れようとしましたが、`
+            + `座席10には入れられず、${where}に配置しました。`
+            + '先に処理されるルール（新人固定席・優先フラグ・本人の固定席／禁止席・他の方の固定席10など）が優先されたためです。'
+            + '座席10に入れたい場合は、座席表で手動で入れ替えてください。',
+        });
+      }
+    }
 
     // どちらの配置に関するメッセージか分かるように接頭辞を付ける
     const prefixLogs = (logs, prefix) => logs.map(l => ({ ...l, message: `${prefix}${l.message}` }));
@@ -1380,7 +1442,10 @@
       hasAdjacentRule: idx.adjacentRuleNames.has(name),
       hasForbiddenSeatRule: idx.forbiddenSeatRuleNames.has(name),
       isDesignated: idx.designatedNames.has(name),
-      designatedSeatNumbers: (idx.designatedSeatsMap.get(name) || []).map(numberOfKey),
+      // 〈ver0.5.7.5〉バッジ用マップ（silent行を除く）を使う。appState.ruleIndexes は
+      // secret.csvの行だけから作るため現状は結果が同じだが、参照元をalgorithm.js側と
+      // そろえて「バッジは配置状態ではなくCSVの記載で決まる」原則を1本にする。
+      designatedSeatNumbers: (idx.designatedSeatsMapForBadge.get(name) || []).map(numberOfKey),
       forbiddenSeatNumbers: (idx.forbiddenSeatsMap.get(name) || []).map(numberOfKey),
       adjacentGroupLetter: (letters && letters.get(name)) || null,
       isSupport: idx.supportNames.has(name),
@@ -3084,8 +3149,10 @@
   // あふれ一覧の印刷用HTML（0件なら空文字）
   function printOverflowHtml(overflowArr) {
     if (overflowArr.length === 0) return '';
+    // 〈ver0.5.7.6で変更〉時刻を素のテキストで出していたため、あふれた人の
+    // 前残業・後残業（※／◆）が紙から落ちていた。座席カードと同じ printTimeSpan を使う。
     return '<div class="print-overflow"><h2>あふれ</h2><ul>'
-      + overflowArr.map(p => `<li>${escapeHtml(p.name)}（${escapeHtml(p.start)} - ${escapeHtml(p.end)}）</li>`).join('')
+      + overflowArr.map(p => `<li>${escapeHtml(p.name)}（${printTimeSpan(p.start, p.frontOT)}<span class="pt-sep">-</span>${printTimeSpan(p.end, p.backOT)}）</li>`).join('')
       + '</ul></div>';
     // ※ 一覧のレイアウト（1行3列）は <style> 側の .print-overflow ul で指定
   }
@@ -3102,10 +3169,12 @@
 
     // 残業の記号が1件でもあれば、意味を説明する凡例を表示する。
     // ページごと・種別ごとに判定するため、OP残業しかいない日に「◆…GL残業」は出ない。
+    // 〈ver0.5.7.6〉あふれ欄にも残業マーカーを出すようになったため、凡例の集計に含める。
     const dayLegendHtml = otLegendHtml(collectOTKinds([]
       .concat(...SEATS.map(s => appState.seats[s.key] || []))
       .concat(Object.values(appState.early))
-      .concat(Object.values(appState.late))));
+      .concat(Object.values(appState.late))
+      .concat(appState.overflow || [])));
 
     // --- 2ページ目: 夜勤 ---
     // 左＝見出しなしの予備枠（通常は空。手動で置いた場合はその内容を印刷）、右＝夜勤GL枠
@@ -3119,7 +3188,8 @@
     const nightLegendHtml = otLegendHtml(collectOTKinds([]
       .concat(...SEATS.map(s => appState.nightSeats[s.key] || []))
       .concat(Object.values(appState.nightGL))
-      .concat(Object.values(appState.nightSpare))));
+      .concat(Object.values(appState.nightSpare))
+      .concat(appState.nightOverflow || [])));
 
     return `<!DOCTYPE html>
 <html lang="ja">
@@ -3160,11 +3230,11 @@
      試したが、環境によって印刷に反映されなかったため、色を統一している。
      背景色が出ないプリンタでも見分けられるよう、※（OP残業）／◆（GL残業）の
      記号を必ず併記している（printTimeSpan を参照）。 */
-  .print-time .pt.ot, .print-leader-time .pt.ot {
+  .print-time .pt.ot, .print-leader-time .pt.ot, .print-overflow .pt.ot {
     font-weight:700; padding:0 0.6mm; border-radius:0.3mm;
   }
-  .print-time .pt.ot-op, .print-leader-time .pt.ot-op { background-color:#FFF3B0; }
-  .print-time .pt.ot-gl, .print-leader-time .pt.ot-gl { background-color:#C8EFD0; }
+  .print-time .pt.ot-op, .print-leader-time .pt.ot-op, .print-overflow .pt.ot-op { background-color:#FFF3B0; }
+  .print-time .pt.ot-gl, .print-leader-time .pt.ot-gl, .print-overflow .pt.ot-gl { background-color:#C8EFD0; }
   .ot-mark { font-size:8px; vertical-align:top; margin-left:0.3mm; }
   .pt-sep { margin:0 0.5mm; color:#777; }
   .print-divider { border-top:1px dashed #999; }
