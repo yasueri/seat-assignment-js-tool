@@ -141,7 +141,12 @@ window.SeatTool.algorithm = (function () {
     const forbiddenPairSet = new Set();
     const forbiddenSeatSet = new Set();
     const forbiddenSeatsMap = new Map(); // name -> [seatKey, ...]（バッジ表示用）
-    const designatedSeatsMap = new Map(); // name -> [seatKey, ...]
+    const designatedSeatsMap = new Map(); // name -> [seatKey, ...]（配置に使う。silent行を含む）
+    // バッジ表示専用の固定席マップ。〈ver0.5.7.5で追加〉
+    // designatedSeatsMap には silent:true（ツール内部の強制配置）の分も入るため、
+    // そのままバッジに使うと secret.csv に書いていない座席番号まで出てしまう。
+    // designatedNames が silent を除いているのと同じ理由・同じ範囲で分けておく。
+    const designatedSeatsMapForBadge = new Map(); // name -> [seatKey, ...]（silent行を除く）
     const supportSeatsMap = new Map(); // name -> [seatKey, ...]（要サポート）
     const adjacentRuleNames = new Set();
     const forbiddenSeatRuleNames = new Set();
@@ -165,9 +170,14 @@ window.SeatTool.algorithm = (function () {
         designatedSeatsMap.get(r.name).push(`${r.row}-${r.col}`);
         // silent=true は「secret.csvには由来しない、ツール内部の強制配置」用の印。
         // designatedSeatsMap には加えて座席への強制配置自体は行うが、
-        // designatedNames には加えないため「固定席」バッジは表示されない
+        // designatedNames・designatedSeatsMapForBadge には加えないため
+        // 「固定席」バッジにもその座席番号にも現れない
         // （夜勤の役席・GLが2名以上のとき座席10へ回る人の配置に使用）。
-        if (!r.silent) designatedNames.add(r.name);
+        if (!r.silent) {
+          designatedNames.add(r.name);
+          if (!designatedSeatsMapForBadge.has(r.name)) designatedSeatsMapForBadge.set(r.name, []);
+          designatedSeatsMapForBadge.get(r.name).push(`${r.row}-${r.col}`);
+        }
       } else if (r.type === 'seat_support') {
         if (!supportSeatsMap.has(r.name)) supportSeatsMap.set(r.name, []);
         supportSeatsMap.get(r.name).push(`${r.row}-${r.col}`);
@@ -185,6 +195,7 @@ window.SeatTool.algorithm = (function () {
 
     return {
       forbiddenPairSet, forbiddenSeatSet, forbiddenSeatsMap, designatedSeatsMap,
+      designatedSeatsMapForBadge,
       supportSeatsMap, supportNames,
       adjacentRuleNames, forbiddenSeatRuleNames, designatedNames, priorityNames,
       nightGLDesignatedNames, priorityFlagMap,
@@ -443,8 +454,11 @@ window.SeatTool.algorithm = (function () {
     return null;
   }
 
-  // 「他」用: 優先順リストにない座席も含め、全15席から探す（特に優先順位は
-  // 設けないため、他の探索と同様にランダムな順で最初に見つかったものを使う）
+  // 「他」用: 優先順リストにない座席も含めて探す（特に優先順位は設けないため、
+  // 他の探索と同様にランダムな順で最初に見つかったものを使う）。
+  // allowSeat9 を渡していないため**座席9番は対象外**。この候補は本人の明示指定に
+  // 由来しないため、座席9番の除外はここでも効かせるのが正しい〈ver0.5.7.6でコメントを訂正。
+  // 以前は「全15席から探す」と書いてあり、実際の挙動と食い違っていた〉。
   function findSharedSeatAnywhere(personA, personB, state, forbiddenSeatSet, forbiddenPairSet) {
     return shuffle(SEATS).find(seat => canPlaceSharedSeat(personA, personB, seat, state, forbiddenSeatSet, forbiddenPairSet)) || null;
   }
@@ -712,8 +726,19 @@ window.SeatTool.algorithm = (function () {
   // 内容だけで先に検出し、その時点で配置を中断するようになったため、通常はここまで
   // 到達しない（B-7は座席9番も考慮するため、Aより広い範囲を拾う）。
   // 保存データの読み込み後など、CSVチェックを通らない経路のための保険として残している。
-  function detectStaticContradictions(byName, forbiddenSeatsMap, forbiddenSeatSet, designatedSeatsMap, supportSeatsMap) {
+  // userDesignatedSeatsMap（省略可）: silent:true の行を除いた固定席マップ
+  // （＝secret.csv に利用者が書いた指定だけ）。〈ver0.5.7.6で追加〉
+  // 夜勤の役席・GL2人目を座席10へ入れる指定は ui.js が silent:true で足す内部のもので、
+  // secret.csv には存在しない。その人に「固定席の指定が禁止席と重複しています」と
+  // 言っても直しようがないため、内部指定だけの人はここでは扱わない
+  // （内部指定が通らなかったことは ui.js が別の言葉で知らせる）。
+  // 省略した場合は従来どおり全件を対象にする。
+  function detectStaticContradictions(byName, forbiddenSeatsMap, forbiddenSeatSet, designatedSeatsMap, supportSeatsMap, userDesignatedSeatsMap) {
     const problems = [];
+    const userDesignatedMap = userDesignatedSeatsMap || designatedSeatsMap;
+    const isSilentOnlyDesignated = (name) => designatedSeatsMap.has(name) && !userDesignatedMap.has(name);
+    // メッセージには内部キー（"2-3"）ではなく画面と同じ座席番号を出す。〈ver0.5.7.6で修正〉
+    const seatNumbersLabel = (seatKeys) => seatKeys.map(k => `${numberOfKey(k)}番`).join('・');
 
     // A. 禁止席が全15席をカバーしている人（絶対にどこにも座れない）
     for (const [name, seatKeys] of forbiddenSeatsMap.entries()) {
@@ -726,36 +751,38 @@ window.SeatTool.algorithm = (function () {
 
     // B. 固定席／要サポートの指定候補が、本人の禁止席と完全に重複している人
     //   （同じ人のsecret.csv内で指定同士が矛盾しているケース）
-    function checkOwnOverlap(map, label) {
+    function checkOwnOverlap(map, label, skipSilentOnly) {
       for (const [name, seatKeys] of map.entries()) {
         if (!byName.has(name) || seatKeys.length === 0) continue;
+        if (skipSilentOnly && isSilentOnlyDesignated(name)) continue;
         const remaining = seatKeys.filter(k => !forbiddenSeatSet.has(`${name}|${k}`));
         if (remaining.length === 0) {
-          problems.push(`${name}さんの${label}指定（${seatKeys.join('・')}）は、すべて本人の禁止席と重複しており、配置できません。`);
+          problems.push(`${name}さんの${label}指定（座席${seatNumbersLabel(seatKeys)}）は、すべて本人の禁止席と重複しており、配置できません。`);
         }
       }
     }
-    checkOwnOverlap(designatedSeatsMap, '固定席');
-    checkOwnOverlap(supportSeatsMap, '要サポート');
+    checkOwnOverlap(designatedSeatsMap, '固定席', true);
+    checkOwnOverlap(supportSeatsMap, '要サポート', false);
 
     // C. 同じ1つの座席だけを候補にしている人が3人以上いる（座席の枠は2つまでのため、
     //    候補が他にない以上、確実に(人数-2)名は配置できない）
     const soleClaimants = new Map(); // seatKey -> [name, ...]
-    function collectSoleClaims(map) {
+    function collectSoleClaims(map, skipSilentOnly) {
       for (const [name, seatKeys] of map.entries()) {
         if (!byName.has(name) || seatKeys.length !== 1) continue;
+        if (skipSilentOnly && isSilentOnlyDesignated(name)) continue;
         const key = seatKeys[0];
         if (!soleClaimants.has(key)) soleClaimants.set(key, []);
         soleClaimants.get(key).push(name);
       }
     }
-    collectSoleClaims(designatedSeatsMap);
-    collectSoleClaims(supportSeatsMap);
+    collectSoleClaims(designatedSeatsMap, true);
+    collectSoleClaims(supportSeatsMap, false);
     for (const [seatKey, names] of soleClaimants.entries()) {
       const uniqueNames = [...new Set(names)];
       if (uniqueNames.length > 2) {
         const num = numberOfKey(seatKey);
-        problems.push(`座席${num}番（${seatKey}）だけを候補にしている方が${uniqueNames.length}名（${uniqueNames.join('・')}）いますが、1座席の枠は2つまでのため、少なくとも${uniqueNames.length - 2}名は配置できません。`);
+        problems.push(`座席${num}番だけを候補にしている方が${uniqueNames.length}名（${uniqueNames.join('・')}）いますが、1座席の枠は2つまでのため、少なくとも${uniqueNames.length - 2}名は配置できません。`);
       }
     }
 
@@ -894,6 +921,7 @@ window.SeatTool.algorithm = (function () {
     const logs = [];
     const {
       forbiddenPairSet, forbiddenSeatSet, forbiddenSeatsMap, designatedSeatsMap,
+      designatedSeatsMapForBadge,
       supportSeatsMap, supportNames,
       adjacentRuleNames, forbiddenSeatRuleNames, designatedNames, priorityNames,
       nightGLDesignatedNames, priorityFlagMap,
@@ -919,7 +947,9 @@ window.SeatTool.algorithm = (function () {
       hasForbiddenSeatRule: forbiddenSeatRuleNames.has(r.name),
       isDesignated: designatedNames.has(r.name),
       // バッジ表示用（座席番号・グループ記号）
-      designatedSeatNumbers: (designatedSeatsMap.get(r.name) || []).map(numberOfKey),
+      // 〈ver0.5.7.5〉silent行（夜勤GL2人目の座席10）を含む designatedSeatsMap ではなく、
+      // secret.csvの記載だけを持つ designatedSeatsMapForBadge を使う。
+      designatedSeatNumbers: (designatedSeatsMapForBadge.get(r.name) || []).map(numberOfKey),
       forbiddenSeatNumbers: (forbiddenSeatsMap.get(r.name) || []).map(numberOfKey),
       adjacentGroupLetter: adjacentGroupLetters.get(r.name) || null,
       // 夜勤専用: 「夜勤GL席」に固定席されている人（バッジ表示用。〈ver0.5.6〉
@@ -950,7 +980,8 @@ window.SeatTool.algorithm = (function () {
 
     // ---- 事前の矛盾検知（静的にわかる範囲）。配置を試みる前にまとめて報告する ----
     const staticProblems = detectStaticContradictions(
-      byName, forbiddenSeatsMap, forbiddenSeatSet, designatedSeatsMap, supportSeatsMap
+      byName, forbiddenSeatsMap, forbiddenSeatSet, designatedSeatsMap, supportSeatsMap,
+      designatedSeatsMapForBadge
     );
     staticProblems.forEach(message => logs.push({ level: 'violation', showDialog: true, message }));
 
@@ -1027,19 +1058,20 @@ window.SeatTool.algorithm = (function () {
       person.isRookie = true;
       person.rookieDegree = n.degree;
     });
-    const rookieCandidates = matchedRookieRows.map(n => ({ ...byName.get(n.name), degree: n.degree }));
+    // 〈ver0.5.7.6で変更〉以前は `{ ...byName.get(n.name), degree }` と**人のコピー**を作り、
+    // stepRookies がそのコピーを座席に置いていた。rookieRank だけは実物にも代入していたため
+    // 実害は出ていなかったが、以後 people に項目を足すと「座席にいる新人だけ古い内容」という
+    // 事故になる。並び替え用の情報は別に持ち、座席に置くのは必ず people の実物にする。
+    const rookieCandidates = matchedRookieRows.map(n => ({ person: byName.get(n.name), degree: n.degree }));
     rookieCandidates.sort((a, b) => {
       if (a.degree !== b.degree) return a.degree - b.degree; // 数値が小さいほど新人=優先
-      return b.shiftIndex - a.shiftIndex; // 同数値: shift.csvで後ろの行がより新人
+      return b.person.shiftIndex - a.person.shiftIndex; // 同数値: shift.csvで後ろの行がより新人
     });
     // 〈ver0.5.5〉優先フラグなどで既に配置済みの新人も、この上位7名の枠を1つ使う。
     // 順位（新人1〜7）と新人固定席の対象者を同じ集合にそろえるため（説明のしやすさを優先）。
     // 新人が7名を超えない運用であれば実際の配置結果に差は出ない。
-    const rookieTop = rookieCandidates.slice(0, ROOKIE_DEFAULT_SEAT_ORDER.length);
-    rookieTop.forEach((person, i) => {
-      person.rookieRank = i + 1;
-      byName.get(person.name).rookieRank = i + 1;
-    });
+    const rookieTop = rookieCandidates.slice(0, ROOKIE_DEFAULT_SEAT_ORDER.length).map(e => e.person);
+    rookieTop.forEach((person, i) => { person.rookieRank = i + 1; });
 
     // ---- 0. 新人（固定席）の配置 ----
     // 優先フラグで既に配置された新人、および繰り上げの最終段階で隣接禁止ステップが先に
@@ -1111,10 +1143,16 @@ window.SeatTool.algorithm = (function () {
           ctx.placedNames.add(person.pkey);
           noteSeat9IfUsed(seat, person.name, '固定席', ctx.logs);
         } else {
-          ctx.logs.push({
-            level: 'violation', showDialog: true,
-            message: `${person.name}さんの配置条件をよく確認してください（指定された座席に配置できません）`,
-          });
+          // silent:true（ui.jsが足す夜勤の座席10）だけしか指定を持たない人には出さない。
+          // 〈ver0.5.7.6〉secret.csv に固定席を書いていないため、この文面では
+          // どこを直せばよいのか分からない。内部指定が通らなかったことは
+          // ui.js 側が「座席10へ入れられなかった」と正しい言葉で知らせる。
+          if (designatedSeatsMapForBadge.has(person.name)) {
+            ctx.logs.push({
+              level: 'violation', showDialog: true,
+              message: `${person.name}さんの配置条件をよく確認してください（指定された座席に配置できません）`,
+            });
+          }
           // 指定席がどれもダメな場合は、通常探索にフォールバックする
           placeOrOverflow(person, ctx.state, forbiddenSeatSet, forbiddenPairSet, ctx.overflow, ctx.placedNames, ctx.logs, false, nightContext);
         }
