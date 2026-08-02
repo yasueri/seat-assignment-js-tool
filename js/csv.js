@@ -327,6 +327,21 @@ window.SeatTool.csv = (function () {
         logs.push({ level: 'warn', message: `${rowLabel}: 時刻の形式が不正なため読み飛ばしました（${name}）。元のExcelを修正し、CSVを出力し直してください。` });
         return;
       }
+      // 時刻の範囲チェック。〈ver0.5.8で追加〉
+      // 開始時刻はその行の日付当日なので 0:00〜23:59 のはず。終了時刻は日をまたぐ
+      // 夜勤のために24時以降の延長表記を許すが、それでも翌日中（47:59）までのはず。
+      // 範囲外は「30:00」「48:00」のような入力ミスで、そのまま通すと勤務時間の
+      // 重なり判定・夜勤判定が丸ごと狂う。読み飛ばして原因を知らせる。
+      if (startMin >= 24 * 60) {
+        skipped.push({ rowNumber: rowNo, date, name, reason: `開始時刻（${start}）が範囲外です（0:00〜23:59で入力してください）` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 開始時刻（${start}）が範囲外のため読み飛ばしました（${name}）。開始時刻はその日の0:00〜23:59で入力してください（24時以降の延長表記が使えるのは終了時刻だけです）。元のExcelを修正し、CSVを出力し直してください。` });
+        return;
+      }
+      if (endMin >= 48 * 60) {
+        skipped.push({ rowNumber: rowNo, date, name, reason: `終了時刻（${end}）が範囲外です（47:59までで入力してください）` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 終了時刻（${end}）が範囲外のため読み飛ばしました（${name}）。日をまたぐ夜勤でも47:59（翌日23:59）までです。元のExcelを修正し、CSVを出力し直してください。` });
+        return;
+      }
       if (startMin >= endMin) {
         skipped.push({ rowNumber: rowNo, date, name, reason: `終了時刻（${end}）が開始時刻（${start}）以前になっています` });
         logs.push({ level: 'warn', message: `${rowLabel}: 開始時刻が終了時刻以降になっているため読み飛ばしました（${name}）。夜勤は終了時刻を24時以降の表記（例: 翌8:00は32:00）で入力してください。元のExcelを修正し、CSVを出力し直してください。` });
@@ -421,7 +436,7 @@ window.SeatTool.csv = (function () {
     dataRows.forEach((r, i) => {
       const name = resolve(cell(r, 0));
       // 新人度合いは「0以上の整数」だけを受け付ける。全角数字（１２３）でもよい。
-      // 〈ver0.5.7.6で変更。それ以前は parseFloat で小数も通り、「3級」のように
+      // 〈ver0.5.8で変更。それ以前は parseFloat で小数も通り、「3級」のように
       //   数字で始まる文字列も 3 として通っていた〉
       // secret.csv の優先フラグ（`/^\d+$/`）と数値の書式をそろえるための変更。
       // 順位付けにしか使わない値のため、小数を認める理由がない。
@@ -534,7 +549,7 @@ window.SeatTool.csv = (function () {
         // 半角・全角スペースどちらでも区切りとして認める（同じ行内の重複番号は1つにまとめる）
         const tokens = seatCell.split(/[ \u3000]+/).filter(Boolean);
         const seenNumsInRow = new Set();
-        // 〈ver0.5.7.6で変更〉重複の登録は、この行が実際に指定を1件でも作れたときだけ行う。
+        // 〈ver0.5.8で変更〉重複の登録は、この行が実際に指定を1件でも作れたときだけ行う。
         // それ以前は tokens を読む前に登録していたため、「固定席,甲,,99番,」のように
         // 座席番号がすべて無効で**1件も指定を作れなかった行**でも「同じ種別に複数行あります」
         // としてB-1で中断していた。効いていない行を理由に止めるのは過剰で、
@@ -662,7 +677,7 @@ window.SeatTool.csv = (function () {
     const dataRows = raw.slice(1);
     const result = [];
     // 教官名（nameKey）-> このファイルで最初に出てきた表記。
-    // 〈ver0.5.7.6で Set から Map に変更〉重複の検出は nameKey、集計は表示用の氏名という
+    // 〈ver0.5.8で Set から Map に変更〉重複の検出は nameKey、集計は表示用の氏名という
     // 取り違えがあり、「山田太郎」と「山田 太郎」のように表記だけ違う2行を書いた場合に、
     // メッセージへ2行目の表記しか出ないことがあった。以後は **キーを nameKey にそろえ、
     // 表示にはそのキーで最初に出てきた表記を使う。**
