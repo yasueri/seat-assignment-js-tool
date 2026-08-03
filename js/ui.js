@@ -918,6 +918,17 @@
       problems.push(`ojt.csv：OJT対象者「${name}」さんが複数の教官（${(mentorNames || []).join('・')}）に紐づいています。担当教官を1名に統一してください。`);
     });
 
+    // ---- B-12 rookie.csv：同じ人が複数行 ----
+    // 〈ver0.5.9で追加〉ver0.5.8までは黄色の警告（「最初の行のみ使用します」）だった。
+    // 採用されなかった行の新人度合いは座席表に痕跡を残さず（出るのは「新人1」等の
+    // バッジだけで、どちらの行由来かは見分けられない）、新人が8名以上いる日は
+    // 上位7名の枠から外れるかどうかまで変わるため、見て気づけない（§1）。
+    // 直し方は「片方の行を消す」で一意に決まる。
+    // B-1（secret.csv）と同じく、度合いが一致していても重複なら中断する。
+    // 「1人1行」の説明を、隣接禁止を除く全ルールで1本にそろえるため。
+    (rookieParsed.duplicateNames || []).filter(name => attendeeNames.has(name))
+      .forEach(name => problems.push(`rookie.csv：「${name}」さんが複数行にあります。1人1行にまとめてください。`));
+
     const secretIdx = buildSecretIndexes(secretParsed.rows);
     const rookieNames = new Set((rookieParsed.rows || []).map(r => r.name));
     const flagMap = secretIdx.priorityFlagMap;
@@ -1203,9 +1214,9 @@
     const rookieNameSet = new Set((rookieParsed.rows || []).map(r => r.name));
     const rookieLeaderNote = (name, where) => ({
       level: 'warn',
-      message: `rookie.csv：「${name}」さんはこの日、役席・GLとして${where}に入るため、新人固定席は効きません`
-        + '（新人固定席は座席1〜15のルールのため）。'
-        + '対処は不要です。同じ人がOP勤務の日は新人固定席が効くため、rookie.csv はそのままにしてください。',
+      message: `rookie.csv：「${name}」さんは役席・GLとして${where}に入るため、新人固定席に配置されません。`
+        + '座席に配置したい場合は、手動で調整するか、'
+        + 'シフト表（エクセル）「スタッフ一覧」シートの役割を「OP」にして、月間シフトCSVを出力し直してください。',
     });
     [...new Set(leaderRows.map(r => r.name).filter(name => rookieNameSet.has(name)))]
       .forEach(name => allLogs.push(rookieLeaderNote(name, '早番・遅番エリア')));
