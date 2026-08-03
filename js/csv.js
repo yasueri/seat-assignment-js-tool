@@ -328,13 +328,14 @@ window.SeatTool.csv = (function () {
         return;
       }
       // 時刻の範囲チェック。〈ver0.5.8で追加〉
-      // 開始時刻はその行の日付当日なので 0:00〜23:59 のはず。終了時刻は日をまたぐ
-      // 夜勤のために24時以降の延長表記を許すが、それでも翌日中（47:59）までのはず。
+      // 開始時刻は日付当日の0:00からだが、日付をまたいで始まる勤務のために
+      // 24時以降の延長表記を認める（0:00〜29:59。例: 翌1:00は25:00）。〈ver0.5.9で24:00→30:00へ拡張〉
+      // 終了時刻も同じく延長表記を許すが、それでも翌日中（47:59）までのはず。
       // 範囲外は「30:00」「48:00」のような入力ミスで、そのまま通すと勤務時間の
       // 重なり判定・夜勤判定が丸ごと狂う。読み飛ばして原因を知らせる。
-      if (startMin >= 24 * 60) {
-        skipped.push({ rowNumber: rowNo, date, name, reason: `開始時刻（${start}）が範囲外です（0:00〜23:59で入力してください）` });
-        logs.push({ level: 'warn', message: `${rowLabel}: 開始時刻（${start}）が範囲外のため読み飛ばしました（${name}）。開始時刻はその日の0:00〜23:59で入力してください（24時以降の延長表記が使えるのは終了時刻だけです）。元のExcelを修正し、CSVを出力し直してください。` });
+      if (startMin >= 30 * 60) {
+        skipped.push({ rowNumber: rowNo, date, name, reason: `開始時刻（${start}）が範囲外です（0:00〜29:59で入力してください）` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 開始時刻（${start}）が範囲外のため読み飛ばしました（${name}）。開始時刻は0:00〜29:59で入力してください（日付をまたいで始まる勤務は24時以降の表記が使えます。例: 翌1:00は25:00）。元のExcelを修正し、CSVを出力し直してください。` });
         return;
       }
       if (endMin >= 48 * 60) {
@@ -431,33 +432,82 @@ window.SeatTool.csv = (function () {
     const resolve = typeof resolveName === 'function' ? resolveName : displayName;
     const dataRows = raw.slice(1);
     const result = [];
-    const seenNames = new Set();
+    // 空白を除いた氏名（nameKey）-> このCSVで最初に出てきた表記。〈ver0.5.9でSetから変更〉
+    const seenNames = new Map();
+    // 複数行に書かれた人（nameKey -> 最初に出てきた表記）。B-12の判定に使う。
+    const duplicateNames = new Map();
 
     dataRows.forEach((r, i) => {
-      const name = resolve(cell(r, 0));
+      const rowNo = lineNoOf(r, i);
+      const nameCell = cell(r, 0);
+      const degreeRaw = cell(r, 1);
+      // 完全な空行は黙って読み飛ばす。判定に使うのは必要な列（氏名・新人度合い）だけで、
+      // 右に足された利用者のメモ列は見ない（他の3ファイルと同じ扱い）。
+      if (!nameCell && !degreeRaw) return;
+
+      const name = resolve(nameCell);
+      // 氏名が空欄の行を知らせる。〈ver0.5.9で追加〉
+      // ver0.5.8までは完全な空行と区別せず、`,3` のような「氏名の書き忘れ」も
+      // 黙って消していた。その人は新人固定席から丸ごと外れるが、座席表では
+      // 普通に座っているだけなので気づけない（仕様.md §1）。
+      // ojt.csv の「教官名が空欄のため読み飛ばしました」、月間シフトCSVの
+      // 「氏名が空欄のため読み飛ばしました」と扱いをそろえた。
+      // 中断にはしない。氏名が無いため「◯◯さんの行を直してください」と書けず、
+      // 直す場所を一意に示せないため（§1）。
+      if (!name) {
+        logs.push({ level: 'warn', message: `rookie.csv ${rowNo}行目: 氏名が空欄のため読み飛ばしました。` });
+        return;
+      }
+
       // 新人度合いは「0以上の整数」だけを受け付ける。全角数字（１２３）でもよい。
       // 〈ver0.5.8で変更。それ以前は parseFloat で小数も通り、「3級」のように
       //   数字で始まる文字列も 3 として通っていた〉
       // secret.csv の優先フラグ（`/^\d+$/`）と数値の書式をそろえるための変更。
       // 順位付けにしか使わない値のため、小数を認める理由がない。
-      const degreeCell = normalizeDigits(cell(r, 1));
-      if (!name) return;
+      //
+      // 〈ver0.5.9で文言を2通りに分けた〉空欄のときに「整数ではないため」「小数は
+      // 使えません」と出すと、何も書いていない人には内容が噛み合わない。
+      // B-9の書き出しを入力内容で出し分けているのと同じ考え方（仕様.md §6）。
+      const degreeCell = normalizeDigits(degreeRaw);
+      if (!degreeCell) {
+        logs.push({ level: 'warn', message: `rookie.csv ${rowNo}行目: 新人度合いが空欄のため読み飛ばしました（${name}）。整数を入力してください（半角・全角どちらでも構いません）。` });
+        return;
+      }
       if (!/^\d+$/.test(degreeCell)) {
-        logs.push({ level: 'warn', message: `rookie.csv ${lineNoOf(r, i)}行目: 新人度合いが整数ではないため読み飛ばしました（${name}）。半角・全角どちらの数字でも指定できますが、小数や「1年目」のような文字は使えません。` });
+        logs.push({ level: 'warn', message: `rookie.csv ${rowNo}行目: 新人度合い「${degreeRaw}」を整数として読み取れないため読み飛ばしました（${name}）。半角・全角どちらの数字でも指定できますが、小数や「1年目」のような文字は使えません。` });
         return;
       }
       const degree = parseInt(degreeCell, 10);
       // 重複判定は空白を除いた氏名（nameKey）で行う。〈ver0.5.6で変更〉
       // 「山田太郎」と「山田 太郎」は同一人物のため、2行あれば重複として扱う。
-      if (seenNames.has(nameKey(name))) {
-        logs.push({ level: 'warn', message: `rookie.csv ${lineNoOf(r, i)}行目: 「${name}」が複数回記載されています。最初の行のみ使用します。` });
+      //
+      // 〈ver0.5.9で中断（B-12）へ格上げ〉ver0.5.8までは、ここで
+      // 「最初の行のみ使用します」という黄色の警告を出していた。しかし
+      // 採用されなかった行の新人度合いは座席表に痕跡を残さず（出るのは
+      // 「新人1」等のバッジだけ）、新人が8名以上いる日は上位7名の枠から
+      // 外れるかどうかまで変わるため、見て気づけない（仕様.md §1）。
+      // secret.csv（B-1）・ojt.csv（B-2・B-3）と同じ扱いにそろえた。
+      //
+      // メッセージの生成は呼び出し側（ui.js の collectBlockingProblems）へ移した。
+      // 中断の対象は選択日に出勤している人だけのため（仕様.md §2）、
+      // ここでは重複した氏名を返すだけにする。ver0.5.7 で ojt.csv に対して
+      // 行ったのと同じ分担。休職中の方の重複行が残っているだけで
+      // 毎日止まることを避ける。
+      //
+      // 新人度合いを読み取れなかった行は、上の return で先に抜けるため
+      // 重複には数えない。効いていない行を理由に配置を止めないため
+      // （B-1 が ver0.5.8 で入れた「指定を1件でも作れた行だけ数える」と同じ考え方）。
+      const nameK = nameKey(name);
+      if (seenNames.has(nameK)) {
+        if (!duplicateNames.has(nameK)) duplicateNames.set(nameK, seenNames.get(nameK));
         return;
       }
-      seenNames.add(nameKey(name));
+      // 表示に使うのは、そのキーで最初に出てきた表記。〈ver0.5.9〉
+      seenNames.set(nameK, name);
       result.push({ name, degree });
     });
 
-    return { rows: result, logs };
+    return { rows: result, logs, duplicateNames: Array.from(duplicateNames.values()) };
   }
 
   // 全角数字を半角に変換する（優先フラグ列の数値を半角・全角どちらでも受け付けるため）
@@ -498,14 +548,25 @@ window.SeatTool.csv = (function () {
     const resolve = typeof resolveName === 'function' ? resolveName : displayName;
     const dataRows = raw.slice(1);
     const result = [];
-    const seenDesignated = new Set();
-    const seenForbidden = new Set();
-    const seenSupport = new Set();
-    const duplicateDesignated = new Set();
-    const duplicateForbidden = new Set();
-    const duplicateSupport = new Set();
+    // 空白を除いた氏名（nameKey）-> このCSVで最初に出てきた表記。〈ver0.5.9でSetから変更〉
+    // 重複の検出は nameKey、メッセージに出す表記はそのキーで**最初に出てきたもの**に
+    // そろえる。ver0.5.8までは検出が nameKey・集計が「その行の表記」という取り違えが
+    // あり、「山田太郎」と「山田 太郎」のように表記だけ違う2行では2行目の表記しか
+    // 出なかった。ver0.5.8でojt.csv（B-2・B-3）に対して行った修正と同じもので、
+    // secret.csv（B-1）だけが残っていた。
+    const seenDesignated = new Map();
+    const seenForbidden = new Map();
+    const seenSupport = new Map();
+    const duplicateDesignated = new Map();
+    const duplicateForbidden = new Map();
+    const duplicateSupport = new Map();
     // 種別が書かれておらず優先フラグだけが入力されている行。〈ver0.5.7で追加。B-9〉
     const priorityOnlyRows = [];
+    // 優先フラグを登録できた行を、人ごとに集める。〈ver0.5.9で追加〉
+    // nameKey -> { name（最初に出てきた表記）, entries: [{ rowNo, flag }] }
+    // 同じ人が複数行になること自体は正常（禁止席＋隣接禁止など、優先フラグは
+    // 5列目でどの種別の行にも書けるため）。値が食い違っているときだけ警告する。
+    const flagEntriesOf = new Map();
     const KNOWN_TYPES = ['隣接禁止', '禁止席', '固定席', '要サポート'];
 
     // 種別ごとの解析。読み飛ばす条件が多く return で抜ける箇所が多いため、
@@ -517,8 +578,19 @@ window.SeatTool.csv = (function () {
       if (type === '隣接禁止') {
         const name1 = resolve(cell(r, 1));
         const name2 = resolve(cell(r, 2));
-        if (!name1 || !name2) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象者名が不足しています` });
+        // 〈ver0.5.9で文言を3通りに分けた〉「対象者名が不足しています」だけでは
+        // 対象1と対象2のどちらを書けばよいのか分からない。B-9の書き出しを入力内容で
+        // 出し分けているのと同じ考え方（仕様.md §6）。
+        if (!name1 && !name2) {
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象1・対象2がどちらも空欄のため読み飛ばしました` });
+          return;
+        }
+        if (!name1) {
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象1が空欄のため読み飛ばしました（対象2は「${name2}」）` });
+          return;
+        }
+        if (!name2) {
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象2が空欄のため読み飛ばしました（対象1は「${name1}」）。隣に座らせない相手の氏名を対象2に書いてください` });
           return;
         }
         // 対象1と対象2が同じ人の行は読み飛ばす。〈ver0.5.7で追加〉
@@ -534,8 +606,18 @@ window.SeatTool.csv = (function () {
       } else if (type === '禁止席' || type === '固定席' || type === '要サポート') {
         const name = resolve(cell(r, 1));
         const seatCell = cell(r, 3);
-        if (!name || !seatCell) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: ${type}の情報が不足しています` });
+        // 〈ver0.5.9で文言を3通りに分けた〉「◯◯の情報が不足しています」だけでは
+        // 氏名と対象座席のどちらが足りないのか分からない。
+        if (!name && !seatCell) {
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: ${type}の対象1（氏名）と対象座席がどちらも空欄のため読み飛ばしました` });
+          return;
+        }
+        if (!name) {
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: ${type}の対象1（氏名）が空欄のため読み飛ばしました（対象座席は「${seatCell}」）` });
+          return;
+        }
+        if (!seatCell) {
+          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: ${type}の対象座席が空欄のため読み飛ばしました（${name}）。座席番号を書いてください（複数指定はスペース区切り）` });
           return;
         }
         const kind = type === '禁止席' ? 'seat_forbidden' : (type === '固定席' ? 'seat_designated' : 'seat_support');
@@ -582,8 +664,12 @@ window.SeatTool.csv = (function () {
           result.push({ type: kind, name, row: seat.row, col: seat.col });
         });
         if (result.length > seatCountBefore) {
-          if (seenSet.has(nameK)) dupSet.add(name);
-          seenSet.add(nameK);
+          if (seenSet.has(nameK)) {
+            // 2件目以降。メッセージには最初に出てきた表記を使う。〈ver0.5.9〉
+            if (!dupSet.has(nameK)) dupSet.set(nameK, seenSet.get(nameK));
+          } else {
+            seenSet.set(nameK, name);
+          }
         }
       } else if (!priorityRegistered) {
         // 優先フラグを登録できた行は、B-9のメッセージで同じ内容を伝えるため
@@ -611,8 +697,13 @@ window.SeatTool.csv = (function () {
         } else {
           const normalized = normalizeDigits(flagCell).trim();
           if (/^\d+$/.test(normalized)) {
-            result.push({ type: 'priority_flag', name: targetNameForFlag, flag: parseInt(normalized, 10) });
+            const flag = parseInt(normalized, 10);
+            result.push({ type: 'priority_flag', name: targetNameForFlag, flag });
             priorityRegistered = true;
+            const flagK = nameKey(targetNameForFlag);
+            const entry = flagEntriesOf.get(flagK) || { name: targetNameForFlag, entries: [] };
+            entry.entries.push({ rowNo, flag });
+            flagEntriesOf.set(flagK, entry);
           } else {
             logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 優先フラグ「${flagCell}」は数値として認識できません` });
           }
@@ -640,12 +731,30 @@ window.SeatTool.csv = (function () {
       }
     });
 
+    // ---- 優先フラグの値が食い違っている人を知らせる ----
+    // 〈ver0.5.9で追加〉同じ人の優先フラグが複数行にあり、**値が2種類以上**あるとき、
+    // buildSecretIndexes は黙って最小値を採用する（マニュアル10章に明記した仕様）。
+    // ただしバッジは「優先」としか出ず数値を表示しないため、採用されなかった値が
+    // 消えたことに座席表を見ても気づけない（仕様.md §1）。
+    // 中断はしない。優先フラグは5列目でどの種別の行にも書けるため、同じ人が
+    // 複数行になること自体は正常であり、「片方を消す」という一意の直し方が無い。
+    // 値が同じなら結果も同じなので何も出さない。
+    flagEntriesOf.forEach(({ name, entries }) => {
+      const values = Array.from(new Set(entries.map(e => e.flag))).sort((a, b) => a - b);
+      if (values.length < 2) return;
+      const rows = entries.map(e => `${e.rowNo}行目`).join('・');
+      logs.push({
+        level: 'warn',
+        message: `secret.csv ${rows}: 「${name}」さんの優先フラグに複数の値（${values.join('・')}）が指定されています。最小値の${values[0]}を使います。`,
+      });
+    });
+
     return {
       rows: result,
       logs,
-      duplicateDesignatedNames: Array.from(duplicateDesignated),
-      duplicateForbiddenNames: Array.from(duplicateForbidden),
-      duplicateSupportNames: Array.from(duplicateSupport),
+      duplicateDesignatedNames: Array.from(duplicateDesignated.values()),
+      duplicateForbiddenNames: Array.from(duplicateForbidden.values()),
+      duplicateSupportNames: Array.from(duplicateSupport.values()),
       priorityOnlyRows,
     };
   }
