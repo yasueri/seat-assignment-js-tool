@@ -101,6 +101,48 @@ window.SeatTool.csv = (function () {
     return nameMap.get(key);
   }
 
+  // ---------- 重複検出（「1人1行」を要求するルールの共通処理） ----------
+  // 〈ver0.5.9.2で共通化〉rookie.csv（B-12）・secret.csv の固定席／禁止席／要サポート
+  // （B-1）・ojt.csv の教官（B-2）は、いずれも「同じ人が複数行に書かれていないか」を
+  // 見る同じ判定で、ver0.5.8〜0.5.9 まで5か所に個別に手書きされていた。
+  // そのため ver0.5.8 で ojt.csv に入れた修正（**判定は nameKey・表示はそのキーで
+  // 最初に出てきた表記**）が B-1 にだけ入っておらず、ver0.5.9 ⑧ でようやく揃うという
+  // 取りこぼしが起きている。判定を1か所に集約して、次に直すときは1か所で済むようにする。
+  //
+  //   add(name, relatedNames)
+  //     初出なら表記を覚えて false を返す。2件目以降なら重複として記録し true を返す。
+  //     呼び出し側は戻り値を見て「この行を採用するか（rookie・ojt）」を決める。
+  //     relatedNames は ojt.csv の教官重複だけが使う「関係者の氏名」で、
+  //     省略してよい（重複の1件目には、常に最初に出てきた表記そのものが入る）。
+  //   names()          … 重複した人の氏名（最初に出てきた表記）の配列
+  //   relatedEntries() … 上に関係者を添えた配列 [{ name, relatedNames }]
+  //
+  // どちらの取り出し方でも、並び順は「重複が最初に見つかった順」で従来と同じ。
+  function makeDuplicateTracker() {
+    const firstDisplayOf = new Map(); // nameKey -> このファイルで最初に出てきた表記
+    const duplicates = new Map();     // nameKey -> { name, related:Set }
+    return {
+      add(name, relatedNames) {
+        const key = nameKey(name);
+        if (!firstDisplayOf.has(key)) {
+          firstDisplayOf.set(key, name);
+          return false;
+        }
+        const canonical = firstDisplayOf.get(key);
+        const entry = duplicates.get(key) || { name: canonical, related: new Set([canonical]) };
+        (relatedNames || []).forEach(n => { if (n) entry.related.add(n); });
+        duplicates.set(key, entry);
+        return true;
+      },
+      names() {
+        return Array.from(duplicates.values(), e => e.name);
+      },
+      relatedEntries() {
+        return Array.from(duplicates.values(), e => ({ name: e.name, relatedNames: Array.from(e.related) }));
+      },
+    };
+  }
+
   // ---------- 時刻処理 ----------
   // 「9:00」「34:00」のほか、秒付きの「34:00:00」も受け付ける（秒は切り捨て）。〈ver0.5.4で追加〉
   // Excelはcsvの24時以降の時刻を「1900/1/1 10:00」という日時として保持しており、
@@ -136,6 +178,34 @@ window.SeatTool.csv = (function () {
     if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
     return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
+
+  // ---------- 必須列が空欄のときの扱い（対応表） ----------
+  // 〈ver0.5.9.2で追加〉「必要な列が空欄 → その行を読み飛ばして warn を出す」処理は
+  // ファイルごとに文言も補足も違うため、関数としては共通化していない
+  // （文言をそろえると、利用者に見えるメッセージが変わってしまう）。
+  // ただし ver0.5.9 ⑥ で「rookie.csv だけ氏名空欄の警告が無い」取りこぼしが見つかった
+  // ように、**抜けは文言ではなく「checkそのものの有無」で起きる。**
+  // 列を増やしたときにここを見れば、どのファイルに何が要るかが分かるようにしておく。
+  //
+  //  ファイル       | 必須列        | 空欄のときの扱い
+  //  ---------------|---------------|------------------------------------------
+  //  月間シフトCSV  | 日付          | 読み飛ばし＋warn＋skipped（B-8で中断）
+  //                 | 氏名          | 読み飛ばし＋warn＋skipped（B-8で中断）
+  //                 | 開始/終了時刻 | 読み飛ばし＋warn＋skipped（B-8で中断）
+  //                 | 役割          | 読み飛ばし＋warn＋skipped（B-8で中断）
+  //  rookie.csv     | 氏名          | 読み飛ばし＋warn 〈ver0.5.9で追加〉
+  //                 | 新人度合い    | 読み飛ばし＋warn
+  //  secret.csv     | 種別          | 読み飛ばし＋warn（優先フラグがあればB-9で中断）
+  //                 | 対象1         | 読み飛ばし＋warn（隣接禁止・座席系で文言が別）
+  //                 | 対象2         | 読み飛ばし＋warn（隣接禁止のみ）
+  //                 | 対象座席      | 読み飛ばし＋warn（隣接禁止以外）
+  //  ojt.csv        | 教官名        | 読み飛ばし＋warn
+  //                 | OJT一人目/二人目 | 両方空欄のときだけ読み飛ばし＋warn
+  //
+  // どのファイルも、**必須列がすべて空の行（完全な空行）は黙って読み飛ばす。**
+  // Excelで行の中身だけを消すと「,,,,」が出力されるため、これを警告にすると
+  // 直しようのないメッセージが行数ぶん並ぶ〈ver0.5.7.3〉。
+  // 行番号の接頭辞は、4つとも `rowLabel`（例: `secret.csv 3行目`）に統一してある。
 
   // ---------- 共通ヘルパー ----------
   function cell(row, index) { return (row[index] || '').trim(); }
@@ -432,13 +502,12 @@ window.SeatTool.csv = (function () {
     const resolve = typeof resolveName === 'function' ? resolveName : displayName;
     const dataRows = raw.slice(1);
     const result = [];
-    // 空白を除いた氏名（nameKey）-> このCSVで最初に出てきた表記。〈ver0.5.9でSetから変更〉
-    const seenNames = new Map();
-    // 複数行に書かれた人（nameKey -> 最初に出てきた表記）。B-12の判定に使う。
-    const duplicateNames = new Map();
+    // 複数行に書かれた人（B-12の判定に使う）。判定・表記の扱いは makeDuplicateTracker 参照。
+    const nameTracker = makeDuplicateTracker();
 
     dataRows.forEach((r, i) => {
       const rowNo = lineNoOf(r, i);
+      const rowLabel = `rookie.csv ${rowNo}行目`;
       const nameCell = cell(r, 0);
       const degreeRaw = cell(r, 1);
       // 完全な空行は黙って読み飛ばす。判定に使うのは必要な列（氏名・新人度合い）だけで、
@@ -455,7 +524,7 @@ window.SeatTool.csv = (function () {
       // 中断にはしない。氏名が無いため「◯◯さんの行を直してください」と書けず、
       // 直す場所を一意に示せないため（§1）。
       if (!name) {
-        logs.push({ level: 'warn', message: `rookie.csv ${rowNo}行目: 氏名が空欄のため読み飛ばしました。` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 氏名が空欄のため読み飛ばしました。` });
         return;
       }
 
@@ -470,11 +539,11 @@ window.SeatTool.csv = (function () {
       // B-9の書き出しを入力内容で出し分けているのと同じ考え方（仕様.md §6）。
       const degreeCell = normalizeDigits(degreeRaw);
       if (!degreeCell) {
-        logs.push({ level: 'warn', message: `rookie.csv ${rowNo}行目: 新人度合いが空欄のため読み飛ばしました（${name}）。整数を入力してください（半角・全角どちらでも構いません）。` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 新人度合いが空欄のため読み飛ばしました（${name}）。整数を入力してください（半角・全角どちらでも構いません）。` });
         return;
       }
       if (!/^\d+$/.test(degreeCell)) {
-        logs.push({ level: 'warn', message: `rookie.csv ${rowNo}行目: 新人度合い「${degreeRaw}」を整数として読み取れないため読み飛ばしました（${name}）。半角・全角どちらの数字でも指定できますが、小数や「1年目」のような文字は使えません。` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 新人度合い「${degreeRaw}」を整数として読み取れないため読み飛ばしました（${name}）。半角・全角どちらの数字でも指定できますが、小数や「1年目」のような文字は使えません。` });
         return;
       }
       const degree = parseInt(degreeCell, 10);
@@ -497,17 +566,11 @@ window.SeatTool.csv = (function () {
       // 新人度合いを読み取れなかった行は、上の return で先に抜けるため
       // 重複には数えない。効いていない行を理由に配置を止めないため
       // （B-1 が ver0.5.8 で入れた「指定を1件でも作れた行だけ数える」と同じ考え方）。
-      const nameK = nameKey(name);
-      if (seenNames.has(nameK)) {
-        if (!duplicateNames.has(nameK)) duplicateNames.set(nameK, seenNames.get(nameK));
-        return;
-      }
-      // 表示に使うのは、そのキーで最初に出てきた表記。〈ver0.5.9〉
-      seenNames.set(nameK, name);
+      if (nameTracker.add(name)) return; // 2行目以降は採用しない
       result.push({ name, degree });
     });
 
-    return { rows: result, logs, duplicateNames: Array.from(duplicateNames.values()) };
+    return { rows: result, logs, duplicateNames: nameTracker.names() };
   }
 
   // 全角数字を半角に変換する（優先フラグ列の数値を半角・全角どちらでも受け付けるため）
@@ -548,18 +611,14 @@ window.SeatTool.csv = (function () {
     const resolve = typeof resolveName === 'function' ? resolveName : displayName;
     const dataRows = raw.slice(1);
     const result = [];
-    // 空白を除いた氏名（nameKey）-> このCSVで最初に出てきた表記。〈ver0.5.9でSetから変更〉
-    // 重複の検出は nameKey、メッセージに出す表記はそのキーで**最初に出てきたもの**に
-    // そろえる。ver0.5.8までは検出が nameKey・集計が「その行の表記」という取り違えが
-    // あり、「山田太郎」と「山田 太郎」のように表記だけ違う2行では2行目の表記しか
-    // 出なかった。ver0.5.8でojt.csv（B-2・B-3）に対して行った修正と同じもので、
-    // secret.csv（B-1）だけが残っていた。
-    const seenDesignated = new Map();
-    const seenForbidden = new Map();
-    const seenSupport = new Map();
-    const duplicateDesignated = new Map();
-    const duplicateForbidden = new Map();
-    const duplicateSupport = new Map();
+    // 同じ種別に同じ人が複数行あるか（B-1）を、種別ごとに見る。
+    // 判定・表記の扱いは makeDuplicateTracker 参照。キーは result に積む type と
+    // そろえてあるため、種別からトラッカーを引くのに分岐が要らない。
+    const dupTrackers = {
+      seat_designated: makeDuplicateTracker(),
+      seat_forbidden: makeDuplicateTracker(),
+      seat_support: makeDuplicateTracker(),
+    };
     // 種別が書かれておらず優先フラグだけが入力されている行。〈ver0.5.7で追加。B-9〉
     const priorityOnlyRows = [];
     // 優先フラグを登録できた行を、人ごとに集める。〈ver0.5.9で追加〉
@@ -574,7 +633,7 @@ window.SeatTool.csv = (function () {
     // 1件も追加しなかった＝この行は座席に関する指定を何も作らなかった」を見て
     // B-9を判定する。priorityRegistered は、この行で優先フラグを登録できたか。
     // 登録できていれば種別の警告は出さない（B-9のメッセージと二重になるため）。
-    function parseTypeCell(r, rowNo, type, priorityRegistered) {
+    function parseTypeCell(r, rowLabel, type, priorityRegistered) {
       if (type === '隣接禁止') {
         const name1 = resolve(cell(r, 1));
         const name2 = resolve(cell(r, 2));
@@ -582,15 +641,15 @@ window.SeatTool.csv = (function () {
         // 対象1と対象2のどちらを書けばよいのか分からない。B-9の書き出しを入力内容で
         // 出し分けているのと同じ考え方（仕様.md §6）。
         if (!name1 && !name2) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象1・対象2がどちらも空欄のため読み飛ばしました` });
+          logs.push({ level: 'warn', message: `${rowLabel}: 隣接禁止の対象1・対象2がどちらも空欄のため読み飛ばしました` });
           return;
         }
         if (!name1) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象1が空欄のため読み飛ばしました（対象2は「${name2}」）` });
+          logs.push({ level: 'warn', message: `${rowLabel}: 隣接禁止の対象1が空欄のため読み飛ばしました（対象2は「${name2}」）` });
           return;
         }
         if (!name2) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象2が空欄のため読み飛ばしました（対象1は「${name1}」）。隣に座らせない相手の氏名を対象2に書いてください` });
+          logs.push({ level: 'warn', message: `${rowLabel}: 隣接禁止の対象2が空欄のため読み飛ばしました（対象1は「${name1}」）。隣に座らせない相手の氏名を対象2に書いてください` });
           return;
         }
         // 対象1と対象2が同じ人の行は読み飛ばす。〈ver0.5.7で追加〉
@@ -599,7 +658,7 @@ window.SeatTool.csv = (function () {
         // ダイアログだけが出て原因が分からない。ojt.csvで教官名とOJT対象者に
         // 同じ氏名が書かれている場合の扱いと揃える。
         if (nameKey(name1) === nameKey(name2)) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 隣接禁止の対象1と対象2に同じ氏名（${name1}）が指定されています。自分自身とは隣接禁止にできないため読み飛ばしました` });
+          logs.push({ level: 'warn', message: `${rowLabel}: 隣接禁止の対象1と対象2に同じ氏名（${name1}）が指定されています。自分自身とは隣接禁止にできないため読み飛ばしました` });
           return;
         }
         result.push({ type: 'adjacent_forbidden', name1, name2 });
@@ -609,24 +668,18 @@ window.SeatTool.csv = (function () {
         // 〈ver0.5.9で文言を3通りに分けた〉「◯◯の情報が不足しています」だけでは
         // 氏名と対象座席のどちらが足りないのか分からない。
         if (!name && !seatCell) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: ${type}の対象1（氏名）と対象座席がどちらも空欄のため読み飛ばしました` });
+          logs.push({ level: 'warn', message: `${rowLabel}: ${type}の対象1（氏名）と対象座席がどちらも空欄のため読み飛ばしました` });
           return;
         }
         if (!name) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: ${type}の対象1（氏名）が空欄のため読み飛ばしました（対象座席は「${seatCell}」）` });
+          logs.push({ level: 'warn', message: `${rowLabel}: ${type}の対象1（氏名）が空欄のため読み飛ばしました（対象座席は「${seatCell}」）` });
           return;
         }
         if (!seatCell) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: ${type}の対象座席が空欄のため読み飛ばしました（${name}）。座席番号を書いてください（複数指定はスペース区切り）` });
+          logs.push({ level: 'warn', message: `${rowLabel}: ${type}の対象座席が空欄のため読み飛ばしました（${name}）。座席番号を書いてください（複数指定はスペース区切り）` });
           return;
         }
         const kind = type === '禁止席' ? 'seat_forbidden' : (type === '固定席' ? 'seat_designated' : 'seat_support');
-        const seenSet = kind === 'seat_forbidden' ? seenForbidden : (kind === 'seat_designated' ? seenDesignated : seenSupport);
-        const dupSet = kind === 'seat_forbidden' ? duplicateForbidden : (kind === 'seat_designated' ? duplicateDesignated : duplicateSupport);
-        // 重複判定は空白を除いた氏名（nameKey）で行う。〈ver0.5.6で変更〉
-        // 「山田太郎」と「山田 太郎」は同一人物のため、同じ種別に2行あれば重複として扱う。
-        // メッセージには利用者が書いた表記をそのまま出すため、集めるのは表示用の氏名。
-        const nameK = nameKey(name);
 
         // 半角・全角スペースどちらでも区切りとして認める（同じ行内の重複番号は1つにまとめる）
         const tokens = seatCell.split(/[ \u3000]+/).filter(Boolean);
@@ -640,7 +693,7 @@ window.SeatTool.csv = (function () {
         tokens.forEach(rawTok => {
           if (rawTok === '夜勤GL席') {
             if (kind !== 'seat_designated') {
-              logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 「夜勤GL席」は固定席でのみ指定できます（禁止席・要サポートには指定できません）` });
+              logs.push({ level: 'warn', message: `${rowLabel}: 「夜勤GL席」は固定席でのみ指定できます（禁止席・要サポートには指定できません）` });
               return;
             }
             result.push({ type: 'night_gl_designated', name });
@@ -650,37 +703,31 @@ window.SeatTool.csv = (function () {
           // 扱いをそろえたもの。メッセージには利用者が書いたままの文字列を出す。
           const tok = normalizeDigits(rawTok);
           if (!/^\d+$/.test(tok)) {
-            logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 「${rawTok}」は座席番号として認識できません` });
+            logs.push({ level: 'warn', message: `${rowLabel}: 「${rawTok}」は座席番号として認識できません` });
             return;
           }
           const seatNum = parseInt(tok, 10);
           const seat = seatByNumber(seatNum);
           if (!seat) {
-            logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 座席番号${seatNum}は存在しません` });
+            logs.push({ level: 'warn', message: `${rowLabel}: 座席番号${seatNum}は存在しません` });
             return;
           }
           if (seenNumsInRow.has(seatNum)) return;
           seenNumsInRow.add(seatNum);
           result.push({ type: kind, name, row: seat.row, col: seat.col });
         });
-        if (result.length > seatCountBefore) {
-          if (seenSet.has(nameK)) {
-            // 2件目以降。メッセージには最初に出てきた表記を使う。〈ver0.5.9〉
-            if (!dupSet.has(nameK)) dupSet.set(nameK, seenSet.get(nameK));
-          } else {
-            seenSet.set(nameK, name);
-          }
-        }
+        if (result.length > seatCountBefore) dupTrackers[kind].add(name);
       } else if (!priorityRegistered) {
         // 優先フラグを登録できた行は、B-9のメッセージで同じ内容を伝えるため
         // ここでは二重に警告しない。〈ver0.5.7.1〉優先フラグが数値でなかった行は
         // 登録されないので、種別の誤字はこちらで必ず伝わる。
-        logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 種別「${type}」は認識できません（「隣接禁止」「禁止席」「固定席」「要サポート」のいずれか）` });
+        logs.push({ level: 'warn', message: `${rowLabel}: 種別「${type}」は認識できません（「隣接禁止」「禁止席」「固定席」「要サポート」のいずれか）` });
       }
     }
 
     dataRows.forEach((r, i) => {
       const rowNo = lineNoOf(r, i);
+      const rowLabel = `secret.csv ${rowNo}行目`;
       const type = cell(r, 0);
       const targetNameForFlag = resolve(cell(r, 1)); // 優先フラグは対象1の氏名に対して適用する
       const flagCell = cell(r, 4);
@@ -693,7 +740,7 @@ window.SeatTool.csv = (function () {
       let priorityRegistered = false;
       if (flagCell) {
         if (!targetNameForFlag) {
-          logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 優先フラグが入力されていますが対象1が空欄のため無視しました` });
+          logs.push({ level: 'warn', message: `${rowLabel}: 優先フラグが入力されていますが対象1が空欄のため無視しました` });
         } else {
           const normalized = normalizeDigits(flagCell).trim();
           if (/^\d+$/.test(normalized)) {
@@ -705,14 +752,14 @@ window.SeatTool.csv = (function () {
             entry.entries.push({ rowNo, flag });
             flagEntriesOf.set(flagK, entry);
           } else {
-            logs.push({ level: 'warn', message: `secret.csv ${rowNo}行目: 優先フラグ「${flagCell}」は数値として認識できません` });
+            logs.push({ level: 'warn', message: `${rowLabel}: 優先フラグ「${flagCell}」は数値として認識できません` });
           }
         }
       }
 
       // 座席に関する指定をこの行が1件でも作ったかどうかは、result の件数で見る。
       const countBefore = result.length;
-      parseTypeCell(r, rowNo, type, priorityRegistered);
+      parseTypeCell(r, rowLabel, type, priorityRegistered);
 
       // ---- B-9 優先フラグだけが効いてしまう行 ----
       // 〈ver0.5.7.1で判定を拡張〉ver0.5.7では「種別が空欄・誤字」の行だけを
@@ -752,9 +799,9 @@ window.SeatTool.csv = (function () {
     return {
       rows: result,
       logs,
-      duplicateDesignatedNames: Array.from(duplicateDesignated.values()),
-      duplicateForbiddenNames: Array.from(duplicateForbidden.values()),
-      duplicateSupportNames: Array.from(duplicateSupport.values()),
+      duplicateDesignatedNames: dupTrackers.seat_designated.names(),
+      duplicateForbiddenNames: dupTrackers.seat_forbidden.names(),
+      duplicateSupportNames: dupTrackers.seat_support.names(),
       priorityOnlyRows,
     };
   }
@@ -785,17 +832,16 @@ window.SeatTool.csv = (function () {
     const resolve = typeof resolveName === 'function' ? resolveName : displayName;
     const dataRows = raw.slice(1);
     const result = [];
-    // 教官名（nameKey）-> このファイルで最初に出てきた表記。
-    // 〈ver0.5.8で Set から Map に変更〉重複の検出は nameKey、集計は表示用の氏名という
-    // 取り違えがあり、「山田太郎」と「山田 太郎」のように表記だけ違う2行を書いた場合に、
-    // メッセージへ2行目の表記しか出ないことがあった。以後は **キーを nameKey にそろえ、
-    // 表示にはそのキーで最初に出てきた表記を使う。**
-    const mentorDisplayOf = new Map();
-    // 重複の中身。〈ver0.5.7で変更〉呼び出し側（ui.js）が「選択日に出勤している人に
-    // 関するものだけ中断する」判定をできるよう、関係者の氏名まで持たせる。
+    // 同じ教官が複数行に書かれていないか（B-2）。判定・表記の扱いは makeDuplicateTracker 参照。
+    // 〈ver0.5.7〉呼び出し側（ui.js）が「選択日に出勤している人に関するものだけ中断する」
+    // 判定をできるよう、関係者の氏名（2行目以降に書かれたOJT対象者）まで持たせる。
     // メッセージもここでは作らず、出勤者に絞った後で呼び出し側が作る。
-    const duplicateMentors = new Map();  // 教官名(nameKey) -> { name, related:Set }
-    const traineeOwner = new Map(); // OJT対象者名（nameKey）-> 最初に見つかった教官名（重複検出用）
+    const mentorTracker = makeDuplicateTracker();
+    // ---- B-3（同じOJT対象者が複数の教官に）は、上とは条件が違うため共通化しない ----
+    // makeDuplicateTracker が見るのは「同じ人が複数行に出てきたか」だが、B-3は
+    // 「同じ人が **別の教官** に割り当てられたか」で、同じ教官が同じ対象者を
+    // 書いている限り重複ではない。判定式が別物のためここは個別に持つ。
+    const traineeOwner = new Map(); // OJT対象者名（nameKey）-> 最初に見つかった教官名
     const traineeDisplayOf = new Map(); // OJT対象者名（nameKey）-> 最初に出てきた表記
     const duplicateTrainees = new Map(); // OJT対象者名(nameKey) -> { name, mentors:Set }
 
@@ -829,15 +875,8 @@ window.SeatTool.csv = (function () {
         logs.push({ level: 'warn', message: `${rowLabel}: 教官名とOJT対象者に同じ氏名（${mentorName}）が指定されています。読み飛ばしました` });
         return;
       }
-      const mentorK = nameKey(mentorName);
-      if (mentorDisplayOf.has(mentorK)) {
-        const canonical = mentorDisplayOf.get(mentorK);
-        const entry = duplicateMentors.get(mentorK) || { name: canonical, related: new Set([canonical]) };
-        [ojt1Raw, ojt2Raw].filter(Boolean).forEach(n => entry.related.add(n));
-        duplicateMentors.set(mentorK, entry);
-        return;
-      }
-      mentorDisplayOf.set(mentorK, mentorName);
+      // 2行目以降は採用せず、その行に書かれたOJT対象者を関係者として記録する
+      if (mentorTracker.add(mentorName, [ojt1Raw, ojt2Raw])) return;
 
       // OJT一人目が空欄でOJT二人目のみ入力されている場合も、教官とペア（同席）で
       // 配置できるよう、OJT二人目をOJT一人目の位置に繰り上げて扱う
@@ -921,7 +960,7 @@ window.SeatTool.csv = (function () {
       rows: result,
       logs,
       // 〈ver0.5.7で形を変更〉氏名の配列から、関係者つきの一覧に変更した。
-      duplicateMentors: Array.from(duplicateMentors.values(), e => ({ name: e.name, relatedNames: Array.from(e.related) })),
+      duplicateMentors: mentorTracker.relatedEntries(),
       duplicateTrainees: Array.from(duplicateTrainees.values(), e => ({ name: e.name, mentorNames: Array.from(e.mentors) })),
       // 教官とOJT対象者の兼務〈ver0.5.7.4で追加。B-10〉
       mentorTraineeConflicts,
