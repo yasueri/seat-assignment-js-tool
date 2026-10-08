@@ -3276,14 +3276,25 @@
   }
 
   // あふれ一覧の印刷用HTML（0件なら空文字）
+  // 早番・遅番と同じ見た目の枠を、2行×6列（最大12枠）で1行目から順に埋める。
+  // 13名以上のときは11名まで表示し、12枠目に「ほか◯名／手書きして」を出す。
+  // 〈見落とし防止のため、あふれの有無が一目で分かる枠表示にした〉
   function printOverflowHtml(overflowArr) {
     if (overflowArr.length === 0) return '';
-    // 〈ver0.5.8で変更〉時刻を素のテキストで出していたため、あふれた人の
-    // 前残業・後残業（※／◆）が紙から落ちていた。座席カードと同じ printTimeSpan を使う。
-    return '<div class="print-overflow"><h2>あふれ</h2><ul>'
-      + overflowArr.map(p => `<li>${escapeHtml(p.name)}（${printTimeSpan(p.start, p.frontOT)}<span class="pt-sep">-</span>${printTimeSpan(p.end, p.backOT)}）</li>`).join('')
-      + '</ul></div>';
-    // ※ 一覧のレイアウト（1行3列）は <style> 側の .print-overflow ul で指定
+    const MAX_CELLS = 12;
+    const overLimit = overflowArr.length > MAX_CELLS;
+    const shown = overLimit ? overflowArr.slice(0, MAX_CELLS - 1) : overflowArr;
+    let cellsHtml = shown.map(p => '<div class="print-overflow-cell">'
+      + `<div class="print-overflow-name">${escapeHtml(p.name)}</div>`
+      + `<div class="print-overflow-time">${printTimeSpan(p.start, p.frontOT)}<span class="pt-sep">-</span>${printTimeSpan(p.end, p.backOT)}</div>`
+      + '</div>').join('');
+    if (overLimit) {
+      cellsHtml += '<div class="print-overflow-cell">'
+        + `<div class="print-overflow-name">ほか${overflowArr.length - shown.length}名</div>`
+        + '<div class="print-overflow-time">手書きして</div>'
+        + '</div>';
+    }
+    return `<div class="print-overflow"><h2>あふれ</h2><div class="print-overflow-grid">${cellsHtml}</div></div>`;
   }
 
   // 印刷用ページは2ページ構成: 1ページ目=日勤、2ページ目=夜勤（A4各1枚。両面コピー用）
@@ -3359,18 +3370,20 @@
      試したが、環境によって印刷に反映されなかったため、色を統一している。
      背景色が出ないプリンタでも見分けられるよう、※（OP残業）／◆（GL残業）の
      記号を必ず併記している（printTimeSpan を参照）。 */
-  .print-time .pt.ot, .print-leader-time .pt.ot, .print-overflow .pt.ot {
+  .print-time .pt.ot, .print-leader-time .pt.ot, .print-overflow-time .pt.ot {
     font-weight:700; padding:0 0.6mm; border-radius:0.3mm;
   }
-  .print-time .pt.ot-op, .print-leader-time .pt.ot-op, .print-overflow .pt.ot-op { background-color:#FFF3B0; }
-  .print-time .pt.ot-gl, .print-leader-time .pt.ot-gl, .print-overflow .pt.ot-gl { background-color:#C8EFD0; }
+  .print-time .pt.ot-op, .print-leader-time .pt.ot-op, .print-overflow-time .pt.ot-op { background-color:#FFF3B0; }
+  .print-time .pt.ot-gl, .print-leader-time .pt.ot-gl, .print-overflow-time .pt.ot-gl { background-color:#C8EFD0; }
   .ot-mark { font-size:8px; vertical-align:top; margin-left:0.3mm; }
   .pt-sep { margin:0 0.5mm; color:#777; }
   .print-divider { border-top:1px dashed #999; }
-  .print-overflow { margin-top:6mm; }
-  .print-overflow h2 { font-size:16px; border-bottom:1px solid #333; padding-bottom:2mm; }
-  .print-overflow ul { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3, 1fr); gap:1.5mm 6mm; }
-  .print-overflow li { font-size:15px; margin:0; }
+  .print-overflow { margin-top:3mm; width:172mm; }
+  .print-overflow h2 { font-size:13px; margin:0 0 1mm; border-bottom:1px solid #333; padding-bottom:0.5mm; }
+  .print-overflow-grid { display:grid; grid-template-columns:repeat(6, 1fr); gap:0.8mm; }
+  .print-overflow-cell { border:1px solid #555; border-radius:1.5mm; height:14mm; padding:0.8mm 1mm; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; overflow:hidden; }
+  .print-overflow-name { font-size:16px; font-weight:600; line-height:1.15; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .print-overflow-time { font-size:16px; color:#555; margin-top:0.3mm; white-space:nowrap; }
   .no-print { text-align:center; margin-bottom:8mm; }
   .no-print button { font-size:15px; padding:9px 18px; cursor:pointer; }
   @media print { .no-print { display:none; } }
